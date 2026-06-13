@@ -16,7 +16,7 @@ BOT_USERNAME = "nevergivup_bot"
 # ⚠️ این آدرس را به آدرس واقعی ربات در Railway/Render تغییر دهید
 # مثال Railway: https://arnold.up.railway.app
 # مثال Render: https://your-app.onrender.com
-BASE_URL = "https://arnold.up.railway.app"   # ← این را عوض کن
+BASE_URL = "https://habib-q5vo.onrender.com"   # ← این را عوض کن
 
 # ---------- کانال الزامی ----------
 REQUIRED_CHANNEL = "@film01385"
