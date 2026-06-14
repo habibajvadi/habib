@@ -674,22 +674,29 @@ def show_bio(call):
     except:
         bot.send_message(call.message.chat.id, "❌ امکان نمایش بیوگرافی وجود ندارد.")
 
+# ========== دکمه پیوی (نمایش آیدی کاربر فضول) ==========
 @bot.callback_query_handler(func=lambda call: call.data.startswith("pv_"))
 def send_pv(call):
     if not check_subscription_and_forward(call, "ارسال پیوی"):
         return
-    _, clicker_id, owner_id = call.data.split("_")
+    # استخراج clicker_id و owner_id از دیتا (فرمت: pv_clicker_id_owner_id)
+    parts = call.data.split("_")
+    if len(parts) < 3:
+        bot.answer_callback_query(call.id, "خطا در اطلاعات!", show_alert=True)
+        return
+    clicker_id = int(parts[1])
+    owner_id = int(parts[2])  # owner_id در اینجا استفاده نمی‌شود ولی برای سازگاری نگه می‌داریم
     bot.answer_callback_query(call.id)
     try:
-        chat = bot.get_chat(int(clicker_id))
+        chat = bot.get_chat(clicker_id)
         username = chat.username
         if username:
-            link = f"https://t.me/{username}"
+            user_info = f"🆔 **آیدی کاربر فضول:**\n@{username}"
         else:
-            link = f"https://t.me/{clicker_id}"
-        bot.send_message(call.message.chat.id, f"🔗 لینک پیوی:\n`{link}`", parse_mode='Markdown')
-    except:
-        bot.send_message(call.message.chat.id, "❌ امکان ساخت لینک پیوی وجود ندارد.")
+            user_info = f"🆔 **آیدی کاربر فضول:**\n`{clicker_id}`"
+        bot.send_message(call.message.chat.id, user_info, parse_mode='Markdown')
+    except Exception as e:
+        bot.send_message(call.message.chat.id, f"❌ امکان دریافت آیدی کاربر وجود ندارد.\nخطا: {e}")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("photo_"))
 def show_photo(call):
