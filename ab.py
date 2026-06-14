@@ -407,7 +407,7 @@ def save_text(message):
     bot.send_message(user_id, f"✅ متن شما با موفقیت ذخیره شد!\n\nمتن شما:\n{text}")
     main_panel(user_id)
 
-# ========== دکمه نمایش کاربران در تله افتاده اخیر (اصلاح شده) ==========
+# ========== دکمه نمایش کاربران در تله افتاده اخیر (اصلاح شده - بدون parse_mode) ==========
 @bot.message_handler(func=lambda message: message.text == "📋 کاربران در تله افتاده اخیر")
 def show_trapped_list(message):
     user_id = message.from_user.id
@@ -417,32 +417,29 @@ def show_trapped_list(message):
         c.execute("SELECT clicker_name, clicker_username, trapped_at FROM trapped_history WHERE owner_id = ? ORDER BY trapped_at DESC LIMIT 20", (user_id,))
         rows = c.fetchall()
         if not rows:
-            bot.send_message(user_id, "📭 **هیچ کاربری تا کنون در تله شما نیفتاده است.**", parse_mode='Markdown')
+            bot.send_message(user_id, "📭 هیچ کاربری تا کنون در تله شما نیفتاده است.")
             return
-        text = "📋 **لیست کاربرانی که در تله شما افتاده‌اند (اخیر):**\n\n"
+        text = "📋 لیست کاربرانی که در تله شما افتاده‌اند (اخیر):\n\n"
         for i, row in enumerate(rows, 1):
             name = row[0] if row[0] else "نامشخص"
             username = row[1] if row[1] else "ندارد"
             trapped_str = row[2]
-            # تبدیل رشته زمان به datetime (پشتیبانی از هر دو فرمت ISO و فضایی)
             try:
                 if 'T' in trapped_str:
                     trapped_dt = datetime.fromisoformat(trapped_str)
                 else:
-                    # فرمت 'YYYY-MM-DD HH:MM:SS.SSS'
                     trapped_dt = datetime.strptime(trapped_str, '%Y-%m-%d %H:%M:%S.%f')
             except:
-                # اگر خطا خورد، به عنوان رشته نمایش بده
                 time_str = trapped_str
             else:
                 time_str = trapped_dt.strftime('%Y/%m/%d %H:%M:%S')
-            text += f"{i}. 👤 **نام:** {name}\n🆔 **یوزرنیم:** @{username if username != 'ندارد' else 'ندارد'}\n📅 **زمان:** {time_str}\n\n"
+            text += f"{i}. 👤 نام: {name}\n🆔 یوزرنیم: @{username if username != 'ندارد' else 'ندارد'}\n📅 زمان: {time_str}\n\n"
         if len(text) > 4000:
             parts = [text[i:i+4000] for i in range(0, len(text), 4000)]
             for part in parts:
-                bot.send_message(user_id, part, parse_mode='Markdown')
+                bot.send_message(user_id, part)
         else:
-            bot.send_message(user_id, text, parse_mode='Markdown')
+            bot.send_message(user_id, text)
     except Exception as e:
         bot.send_message(user_id, f"❌ خطا در نمایش تاریخچه: {e}")
         print(f"Error in show_trapped_list: {e}")
