@@ -242,7 +242,7 @@ def get_clicker_name(clicker_id):
     except:
         return "کاربر ناشناس"
 
-# ========== ذخیره تاریخچه (اصلاح شده با ذخیره ISO زمان) ==========
+# ========== ذخیره تاریخچه ==========
 def save_trapped_history(owner_id, clicker_id, clicker_name, clicker_username):
     try:
         trapped_time = datetime.now().isoformat()
@@ -252,7 +252,7 @@ def save_trapped_history(owner_id, clicker_id, clicker_name, clicker_username):
     except Exception as e:
         print(f"Error saving trapped history: {e}")
 
-# ========== تابع حذف پیام با تأخیر (اصلاح شرط) ==========
+# ========== تابع حذف پیام با تأخیر ==========
 def delete_message_later(chat_id, message_id, delay, clicker_id, owner_name, report_id):
     time.sleep(delay)
     c.execute("SELECT status FROM cancel_payments WHERE report_id = ? AND status = 'paid'", (report_id,))
@@ -264,14 +264,12 @@ def delete_message_later(chat_id, message_id, delay, clicker_id, owner_name, rep
         pass
     c.execute("SELECT cancelled FROM pending_reports WHERE id = ?", (report_id,))
     result = c.fetchone()
-    # مقدار cancelled در SQLite عدد 0 (False) یا 1 (True) است
     if result and result[0] == 0:
         c.execute("SELECT owner_id, clicker_id FROM pending_reports WHERE id = ?", (report_id,))
         row = c.fetchone()
         if row:
             owner_id, clicker_id = row
             clicker_name = get_clicker_name(clicker_id)
-            # ذخیره در تاریخچه
             try:
                 chat = bot.get_chat(clicker_id)
                 username = chat.username if chat.username else None
@@ -298,7 +296,7 @@ def delete_message_later(chat_id, message_id, delay, clicker_id, owner_name, rep
             except:
                 pass
 
-# ---------- هندلر استارت ----------
+# ---------- هندلر استارت (با پشتیبانی از متن و عکس شخصی‌سازی شده) ----------
 @bot.message_handler(commands=['start'])
 def start(message):
     user_id = message.from_user.id
@@ -311,13 +309,50 @@ def start(message):
             owner_name = get_owner_name(owner_id)
             keyboard = InlineKeyboardMarkup()
             keyboard.add(InlineKeyboardButton("❌ عدم ارسال گزارش فضولی", callback_data=f"cancel_{code}_{clicker_id}"))
-            trap_message = f"⚠️ **نباید این فضولی رو میکردی!**\n\nالان این فضولیت برای {owner_name} ارسال شد، بهتره قبل از اینکه بیاد ببینه، خودت بهش بگی داشتی فضولی میکردی 😊\n\nبرای عدم ارسال دکمه زیر را فشار دهید (فرصت شما 1 دقیقه و 15 ثانیه)"
-            msg = bot.send_message(clicker_id, trap_message, reply_markup=keyboard, parse_mode='Markdown')
+            
+            # ----- دریافت متن و عکس شخصی‌سازی شده از دیتابیس -----
+            c.execute("SELECT text FROM user_texts WHERE user_id = ?", (owner_id,))
+            text_row = c.fetchone()
+            c.execute("SELECT photo_id FROM user_photos WHERE user_id = ?", (owner_id,))
+            photo_row = c.fetchone()
+            
+            trap_text = None
+            trap_photo = None
+            
+            if text_row and text_row[0]:
+                trap_text = text_row[0]
+            if photo_row and photo_row[0]:
+                trap_photo = photo_row[0]
+            
+            # اگر متن سفارشی وجود نداشت، از متن پیش‌فرض استفاده کن
+            if not trap_text:
+                trap_text = f"⚠️ **نباید این فضولی رو میکردی!**\n\nالان این فضولیت برای {owner_name} ارسال شد، بهتره قبل از اینکه بیاد ببینه، خودت بهش بگی داشتی فضولی میکردی 😊\n\nبرای عدم ارسال دکمه زیر را فشار دهید (فرصت شما 1 دقیقه و 15 ثانیه)"
+            
+            # ارسال پیام تله (با عکس یا بدون عکس)
+            if trap_photo:
+                # ارسال عکس به همراه کپشن (متن تله) و دکمه
+                msg = bot.send_photo(
+                    clicker_id,
+                    trap_photo,
+                    caption=trap_text,
+                    reply_markup=keyboard,
+                    parse_mode='Markdown'
+                )
+            else:
+                # ارسال فقط متن
+                msg = bot.send_message(
+                    clicker_id,
+                    trap_text,
+                    reply_markup=keyboard,
+                    parse_mode='Markdown'
+                )
+            
             c.execute("INSERT INTO pending_reports (link_code, owner_id, clicker_id, message_id, expires_at) VALUES (?, ?, ?, ?, ?)",
                       (code, owner_id, clicker_id, msg.message_id, datetime.now() + timedelta(seconds=75)))
             conn.commit()
             report_id = c.lastrowid
             threading.Thread(target=delete_message_later, args=(clicker_id, msg.message_id, 75, clicker_id, owner_name, report_id)).start()
+            
         elif owner_id == clicker_id:
             bot.send_message(clicker_id, "⚠️ این لینک مال خودته!")
             main_panel(clicker_id)
@@ -385,7 +420,7 @@ def save_photo(message):
         file_id = message.photo[-1].file_id
         c.execute("INSERT OR REPLACE INTO user_photos (user_id, photo_id) VALUES (?, ?)", (user_id, file_id))
         conn.commit()
-        bot.send_message(user_id, "✅ عکس شما با موفقیت ذخیره شد!")
+        bot.send_message(user_id, "✅ عکس مچ‌گیری شما با موفقیت ذخیره شد!\nاز این پس هنگام کلیک روی لینک شما، این عکس نمایش داده می‌شود.")
     else:
         bot.send_message(user_id, "❌ لطفاً یک عکس معتبر ارسال کنید.")
     main_panel(user_id)
@@ -404,10 +439,10 @@ def save_text(message):
     text = message.text
     c.execute("INSERT OR REPLACE INTO user_texts (user_id, text) VALUES (?, ?)", (user_id, text))
     conn.commit()
-    bot.send_message(user_id, f"✅ متن شما با موفقیت ذخیره شد!\n\nمتن شما:\n{text}")
+    bot.send_message(user_id, f"✅ متن مچ‌گیری شما با موفقیت ذخیره شد!\nاز این پس هنگام کلیک روی لینک شما، این متن نمایش داده می‌شود.\n\nمتن شما:\n{text}")
     main_panel(user_id)
 
-# ========== دکمه نمایش کاربران در تله افتاده اخیر (اصلاح شده - بدون parse_mode) ==========
+# ========== دکمه نمایش کاربران در تله افتاده اخیر ==========
 @bot.message_handler(func=lambda message: message.text == "📋 کاربران در تله افتاده اخیر")
 def show_trapped_list(message):
     user_id = message.from_user.id
