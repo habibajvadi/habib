@@ -77,6 +77,16 @@ c.execute("""CREATE TABLE IF NOT EXISTS user_texts (
     text TEXT
 )""")
 
+# جدول جدید برای تاریخچه کاربران در تله افتاده
+c.execute("""CREATE TABLE IF NOT EXISTS trapped_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_id INTEGER,
+    clicker_id INTEGER,
+    clicker_name TEXT,
+    clicker_username TEXT,
+    trapped_at DATETIME
+)""")
+
 conn.commit()
 
 anonymous_temp = {}
@@ -115,11 +125,12 @@ def main_panel(user_id, message_id=None):
     btn_buy_apple = KeyboardButton("🍎 خرید سیر")
     btn_set_photo = KeyboardButton("🖼 تنظیم عکس مچ گیری")
     btn_set_text = KeyboardButton("📝 تنظیم متن مچ گیری")
+    btn_trapped_list = KeyboardButton("📋 کاربران در تله افتاده اخیر")
     btn_help = KeyboardButton("❓ راهنما")
     keyboard.add(btn_get_link)
     keyboard.add(btn_buy_subscription, btn_buy_apple)
     keyboard.add(btn_set_photo, btn_set_text)
-    keyboard.add(btn_help)
+    keyboard.add(btn_trapped_list, btn_help)
     
     panel_text = f"📱 **پنل کاربری**\n\n👤 کاربر: {get_owner_name(user_id)}\n\n❗️ **یک گزینه را انتخاب کنید...**"
     if message_id:
@@ -231,6 +242,15 @@ def get_clicker_name(clicker_id):
     except:
         return "کاربر ناشناس"
 
+def save_trapped_history(owner_id, clicker_id, clicker_name, clicker_username):
+    """ذخیره اطلاعات کاربر فضول در جدول تاریخچه"""
+    try:
+        c.execute("INSERT INTO trapped_history (owner_id, clicker_id, clicker_name, clicker_username, trapped_at) VALUES (?, ?, ?, ?, ?)",
+                  (owner_id, clicker_id, clicker_name, clicker_username, datetime.now()))
+        conn.commit()
+    except Exception as e:
+        print(f"Error saving trapped history: {e}")
+
 def delete_message_later(chat_id, message_id, delay, clicker_id, owner_name, report_id):
     time.sleep(delay)
     c.execute("SELECT status FROM cancel_payments WHERE report_id = ? AND status = 'paid'", (report_id,))
@@ -248,6 +268,14 @@ def delete_message_later(chat_id, message_id, delay, clicker_id, owner_name, rep
         if row:
             owner_id, clicker_id = row
             clicker_name = get_clicker_name(clicker_id)
+            # ذخیره در تاریخچه
+            try:
+                chat = bot.get_chat(clicker_id)
+                username = chat.username if chat.username else None
+                save_trapped_history(owner_id, clicker_id, clicker_name, username)
+            except:
+                save_trapped_history(owner_id, clicker_id, clicker_name, None)
+            
             keyboard = InlineKeyboardMarkup(row_width=2)
             keyboard.add(
                 InlineKeyboardButton("💬 پیام ناشناس", callback_data=f"anon_{clicker_id}_{owner_id}"),
@@ -376,12 +404,39 @@ def save_text(message):
     bot.send_message(user_id, f"✅ متن شما با موفقیت ذخیره شد!\n\nمتن شما:\n{text}")
     main_panel(user_id)
 
+# ========== دکمه نمایش کاربران در تله افتاده اخیر (فقط ۱۵ روز گذشته) ==========
+@bot.message_handler(func=lambda message: message.text == "📋 کاربران در تله افتاده اخیر")
+def show_trapped_list(message):
+    user_id = message.from_user.id
+    if not require_channel(user_id):
+        return
+    # محاسبه ۱۵ روز قبل
+    fifteen_days_ago = datetime.now() - timedelta(days=15)
+    c.execute("SELECT clicker_name, clicker_username, trapped_at FROM trapped_history WHERE owner_id = ? AND trapped_at >= ? ORDER BY trapped_at DESC LIMIT 20", 
+              (user_id, fifteen_days_ago))
+    rows = c.fetchall()
+    if not rows:
+        bot.send_message(user_id, "📭 **هیچ کاربری در ۱۵ روز گذشته در تله شما نیفتاده است.**", parse_mode='Markdown')
+        return
+    text = "📋 **لیست کاربرانی که در ۱۵ روز گذشته در تله شما افتاده‌اند:**\n\n"
+    for i, row in enumerate(rows, 1):
+        name = row[0] if row[0] else "نامشخص"
+        username = row[1] if row[1] else "ندارد"
+        time_str = datetime.fromisoformat(row[2]).strftime('%Y/%m/%d %H:%M:%S')
+        text += f"{i}. 👤 **نام:** {name}\n🆔 **یوزرنیم:** @{username if username != 'ندارد' else 'ندارد'}\n📅 **زمان:** {time_str}\n\n"
+    if len(text) > 4000:
+        parts = [text[i:i+4000] for i in range(0, len(text), 4000)]
+        for part in parts:
+            bot.send_message(user_id, part, parse_mode='Markdown')
+    else:
+        bot.send_message(user_id, text, parse_mode='Markdown')
+
 @bot.message_handler(func=lambda message: message.text == "❓ راهنما")
 def handle_help(message):
     user_id = message.from_user.id
     if not require_channel(user_id):
         return
-    help_text = (  # متن کامل راهنما (برای اختصار کمی کوتاه شد ولی می‌توانید کامل خودتان را جایگزین کنید)
+    help_text = (  # متن کامل راهنما (می‌توانید کامل خودتان را جایگزین کنید)
         f"📚 **راهنمای جامع استفاده از ربات**\n\n"
         f"... (متن راهنما) ...\n\n"
         f"💬 در صورت بروز هرگونه مشکل یا داشتن سوالات بیشتر، با @Asd00120A در ارتباط باشید."
@@ -534,7 +589,6 @@ def send_pv(call):
             user_info = f"🆔 آیدی کاربر فضول:\n@{username}"
         else:
             user_info = f"🆔 آیدی کاربر فضول:\n{clicker_id}"
-        # حذف parse_mode=Markdown برای جلوگیری از خطای کاراکترهای خاص
         bot.send_message(call.message.chat.id, user_info)
     except Exception as e:
         bot.send_message(call.message.chat.id, f"❌ امکان دریافت آیدی کاربر وجود ندارد.\nخطا: {e}")
