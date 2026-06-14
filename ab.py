@@ -10,7 +10,7 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeybo
 import os
 
 # ---------- تنظیمات ----------
-TOKEN = "8981742192:AAHC8z6u6GifXgMIafvzv0tn_Q2LV1mM2bQ" 
+TOKEN = "8981742192:AAHC8z6u6GifXgMIafvzv0tn_Q2LV1mM2bQ"
 BOT_USERNAME = "nevergivup_bot"
 BASE_URL = "https://habib-q5vo.onrender.com"
 
@@ -37,7 +37,6 @@ c.execute("""CREATE TABLE IF NOT EXISTS pending_reports (
     cancelled BOOLEAN DEFAULT FALSE
 )""")
 
-# فقط جدول cancel_payments برای پرداخت تستی باقی می‌ماند
 c.execute("""CREATE TABLE IF NOT EXISTS cancel_payments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     report_id INTEGER,
@@ -53,11 +52,6 @@ c.execute("""CREATE TABLE IF NOT EXISTS user_photos (
     photo_id TEXT
 )""")
 
-c.execute("""CREATE TABLE IF NOT EXISTS user_texts (
-    user_id INTEGER PRIMARY KEY,
-    text TEXT
-)""")
-
 c.execute("""CREATE TABLE IF NOT EXISTS trapped_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     owner_id INTEGER,
@@ -71,10 +65,10 @@ conn.commit()
 
 anonymous_temp = {}
 
-# ========== مدیران ربات (فقط این افراد به پنل مدیریت دسترسی دارند) ==========
+# ========== مدیران ربات ==========
 ADMIN_IDS = [7301015165, 5333419558]  # آیدی‌های عددی خود را جایگزین کنید
 
-# ========== توابع کمکی برای آمار (پنل مدیریت) ==========
+# ========== توابع کمکی برای آمار ==========
 def get_total_users():
     c.execute("SELECT COUNT(*) FROM users")
     return c.fetchone()[0]
@@ -89,10 +83,6 @@ def get_total_trapped():
 
 def get_total_photos():
     c.execute("SELECT COUNT(*) FROM user_photos")
-    return c.fetchone()[0]
-
-def get_total_texts():
-    c.execute("SELECT COUNT(*) FROM user_texts")
     return c.fetchone()[0]
 
 # ========== بررسی عضویت در کانال ==========
@@ -121,22 +111,19 @@ def require_channel(user_id):
         )
         return False
 
-# ========== پنل اصلی (بدون دکمه اشتراک) ==========
+# ========== پنل اصلی (بدون دکمه‌های متن) ==========
 def main_panel(user_id, message_id=None):
     keyboard = ReplyKeyboardMarkup(row_width=2, resize_keyboard=True, one_time_keyboard=False)
     btn_get_link = KeyboardButton("🔗 دریافت لینک من")
     btn_buy_apple = KeyboardButton("🍎 خرید سیر")
     btn_set_photo = KeyboardButton("🖼 تنظیم عکس مچ گیری")
-    btn_set_text = KeyboardButton("📝 تنظیم متن مچ گیری")
     btn_del_photo = KeyboardButton("🗑 حذف عکس مچ گیری")
-    btn_del_text = KeyboardButton("🗑 حذف متن مچ گیری")
     btn_trapped_list = KeyboardButton("📋 کاربران در تله افتاده اخیر")
     btn_help = KeyboardButton("❓ راهنما")
     
     keyboard.add(btn_get_link)
     keyboard.add(btn_buy_apple)
-    keyboard.add(btn_set_photo, btn_set_text)
-    keyboard.add(btn_del_photo, btn_del_text)
+    keyboard.add(btn_set_photo, btn_del_photo)
     keyboard.add(btn_trapped_list, btn_help)
     
     panel_text = f"📱 **پنل کاربری**\n\n👤 کاربر: {get_owner_name(user_id)}\n\n❗️ **یک گزینه را انتخاب کنید...**"
@@ -163,12 +150,10 @@ def get_owner_id_by_code(code):
         return None
 
 def get_owner_name(owner_id):
-    # ابتدا از دیتابیس می‌خوانیم
     c.execute("SELECT user_name FROM users WHERE telegram_id = ?", (owner_id,))
     row = c.fetchone()
     if row and row[0]:
         return row[0]
-    # اگر در دیتابیس نبود، از API تلگرام بگیریم
     try:
         chat = bot.get_chat(owner_id)
         name = f"{chat.first_name or ''} {chat.last_name or ''}".strip()
@@ -197,7 +182,6 @@ def save_trapped_history(owner_id, clicker_id, clicker_name, clicker_username):
 
 def delete_message_later(chat_id, message_id, delay, clicker_id, owner_name, report_id):
     time.sleep(delay)
-    # بررسی پرداخت تستی (fake_pay)
     c.execute("SELECT status FROM cancel_payments WHERE report_id = ? AND status = 'paid'", (report_id,))
     if c.fetchone():
         return
@@ -239,12 +223,11 @@ def delete_message_later(chat_id, message_id, delay, clicker_id, owner_name, rep
             except:
                 pass
 
-# ---------- هندلر استارت (با ذخیره نام کاربر) ----------
+# ---------- هندلر استارت ----------
 @bot.message_handler(commands=['start'])
 def start(message):
     user_id = message.from_user.id
     text = message.text
-    # ذخیره نام کاربر در دیتابیس
     name = message.from_user.first_name
     if message.from_user.last_name:
         name += " " + message.from_user.last_name
@@ -261,20 +244,12 @@ def start(message):
             keyboard = InlineKeyboardMarkup()
             keyboard.add(InlineKeyboardButton("❌ عدم ارسال گزارش فضولی", callback_data=f"cancel_{code}_{clicker_id}"))
             
-            # دریافت متن و عکس شخصی‌سازی شده
-            c.execute("SELECT text FROM user_texts WHERE user_id = ?", (owner_id,))
-            text_row = c.fetchone()
+            # فقط عکس شخصی‌سازی شده (بدون متن)
             c.execute("SELECT photo_id FROM user_photos WHERE user_id = ?", (owner_id,))
             photo_row = c.fetchone()
+            trap_photo = photo_row[0] if photo_row and photo_row[0] else None
             
-            trap_text = None
-            trap_photo = None
-            if text_row and text_row[0]:
-                trap_text = text_row[0]
-            if photo_row and photo_row[0]:
-                trap_photo = photo_row[0]
-            if not trap_text:
-                trap_text = f"⚠️ **نباید این فضولی رو میکردی!**\n\nالان این فضولیت برای {owner_name} ارسال شد، بهتره قبل از اینکه بیاد ببینه، خودت بهش بگی داشتی فضولی میکردی 😊\n\nبرای عدم ارسال دکمه زیر را فشار دهید (فرصت شما 1 دقیقه و 15 ثانیه)"
+            trap_text = f"⚠️ **نباید این فضولی رو میکردی!**\n\nالان این فضولیت برای {owner_name} ارسال شد، بهتره قبل از اینکه بیاد ببینه، خودت بهش بگی داشتی فضولی میکردی 😊\n\nبرای عدم ارسال دکمه زیر را فشار دهید (فرصت شما 1 دقیقه و 15 ثانیه)"
             
             if trap_photo:
                 msg = bot.send_photo(clicker_id, trap_photo, caption=trap_text, reply_markup=keyboard, parse_mode='Markdown')
@@ -342,24 +317,7 @@ def save_photo(message):
         bot.send_message(user_id, "❌ لطفاً یک عکس معتبر ارسال کنید.")
     main_panel(user_id)
 
-@bot.message_handler(func=lambda message: message.text == "📝 تنظیم متن مچ گیری")
-def handle_set_text(message):
-    user_id = message.from_user.id
-    if not require_channel(user_id):
-        return
-    hide_keyboard = ReplyKeyboardRemove()
-    bot.send_message(user_id, "📝 **تنظیم متن مچ گیری**\n\nلطفاً متن مورد نظر خود را ارسال کنید:", reply_markup=hide_keyboard, parse_mode='Markdown')
-    bot.register_next_step_handler(message, save_text)
-
-def save_text(message):
-    user_id = message.from_user.id
-    text = message.text
-    c.execute("INSERT OR REPLACE INTO user_texts (user_id, text) VALUES (?, ?)", (user_id, text))
-    conn.commit()
-    bot.send_message(user_id, f"✅ متن مچ‌گیری شما با موفقیت ذخیره شد!\nاز این پس هنگام کلیک روی لینک شما، این متن نمایش داده می‌شود.\n\nمتن شما:\n{text}")
-    main_panel(user_id)
-
-# ========== دکمه‌های حذف عکس و متن مچ‌گیری ==========
+# ========== دکمه حذف عکس مچ گیری ==========
 @bot.message_handler(func=lambda message: message.text == "🗑 حذف عکس مچ گیری")
 def delete_trap_photo(message):
     user_id = message.from_user.id
@@ -368,16 +326,6 @@ def delete_trap_photo(message):
     c.execute("DELETE FROM user_photos WHERE user_id = ?", (user_id,))
     conn.commit()
     bot.send_message(user_id, "🗑 عکس مچ‌گیری شما با موفقیت حذف شد.\nاز این پس هنگام کلیک روی لینک شما، عکسی نمایش داده نمی‌شود.")
-    main_panel(user_id)
-
-@bot.message_handler(func=lambda message: message.text == "🗑 حذف متن مچ گیری")
-def delete_trap_text(message):
-    user_id = message.from_user.id
-    if not require_channel(user_id):
-        return
-    c.execute("DELETE FROM user_texts WHERE user_id = ?", (user_id,))
-    conn.commit()
-    bot.send_message(user_id, "🗑 متن مچ‌گیری شما با موفقیت حذف شد.\nاز این پس هنگام کلیک روی لینک شما، متن پیش‌فرض نمایش داده می‌شود.")
     main_panel(user_id)
 
 # ========== دکمه نمایش کاربران در تله افتاده اخیر ==========
@@ -437,10 +385,9 @@ def handle_help(message):
         "**۲. امکانات رایگان (بدون نیاز به اشتراک):**\n"
         "🔹 **ارسال پیام ناشناس:** می‌توانید از طریق ربات، برای شخصی که در تله شما افتاده است به صورت کاملاً ناشناس پیام ارسال کنید.\n"
         "🔹 **مشاهده بیوگرافی و عکس پروفایل و آیدی کاربران:** همه این قابلیت‌ها به صورت رایگان در دسترس است.\n\n"
-        "**۳. شخصی‌سازی تله (متن و عکس مچ‌گیری):**\n"
-        "شما می‌توانید واکنش ربات به فردی که در تله می‌افتد را کاملاً شخصی‌سازی کنید:\n"
-        "🔹 **تنظیم متن مچ‌گیری:** پیامی که فرد به محض کلیک روی لینک شما دریافت می‌کند را تغییر دهید.\n"
-        "🔹 **تنظیم عکس مچ‌گیری:** علاوه بر متن، می‌توانید یک تصویر دلخواه تنظیم کنید تا به محض ورود شخص، آن عکس نیز برای وی ارسال شود.\n\n"
+        "**۳. شخصی‌سازی تله (عکس مچ‌گیری):**\n"
+        "شما می‌توانید واکنش ربات به فردی که در تله می‌افتد را شخصی‌سازی کنید:\n"
+        "🔹 **تنظیم عکس مچ‌گیری:** یک تصویر دلخواه تنظیم کنید تا به محض ورود شخص، آن عکس نیز برای وی ارسال شود.\n\n"
         "💬 در صورت بروز هرگونه مشکل یا داشتن سوالات بیشتر، با @Asd00120A در ارتباط باشید."
     )
     keyboard = InlineKeyboardMarkup()
@@ -609,7 +556,7 @@ def show_photo(call):
     except:
         bot.send_message(call.message.chat.id, "❌ امکان نمایش عکس وجود ندارد.")
 
-# ---------- پنل مدیریت (فقط برای ادمین‌ها) ----------
+# ---------- پنل مدیریت ----------
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
     user_id = message.from_user.id
@@ -623,7 +570,6 @@ def admin_panel(message):
         InlineKeyboardButton("👥 لیست کاربران", callback_data="admin_users"),
         InlineKeyboardButton("📋 گزارش‌های تله", callback_data="admin_reports"),
         InlineKeyboardButton("🖼 عکس‌های ذخیره شده", callback_data="admin_photos"),
-        InlineKeyboardButton("📝 متن‌های ذخیره شده", callback_data="admin_texts"),
         InlineKeyboardButton("🗑 پاک کردن دیتابیس", callback_data="admin_clear"),
         InlineKeyboardButton("🔙 بستن پنل", callback_data="admin_close")
     )
@@ -634,8 +580,7 @@ def admin_panel(message):
         f"👤 کل کاربران: {get_total_users()}\n"
         f"📊 گزارش‌های فعال: {get_total_reports()}\n"
         f"🎯 کاربران در تله رفته: {get_total_trapped()}\n"
-        f"🖼 عکس‌های مچ‌گیری: {get_total_photos()}\n"
-        f"📝 متن‌های مچ‌گیری: {get_total_texts()}"
+        f"🖼 عکس‌های مچ‌گیری: {get_total_photos()}"
     )
     
     bot.send_message(user_id, text, reply_markup=keyboard, parse_mode='Markdown')
@@ -655,8 +600,7 @@ def admin_callback(call):
             f"👤 کل کاربران: {get_total_users()}\n"
             f"📝 گزارش‌های در انتظار: {get_total_reports()}\n"
             f"🎯 کاربران در تله رفته: {get_total_trapped()}\n"
-            f"🖼 عکس‌های مچ‌گیری: {get_total_photos()}\n"
-            f"📝 متن‌های مچ‌گیری: {get_total_texts()}"
+            f"🖼 عکس‌های مچ‌گیری: {get_total_photos()}"
         )
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode='Markdown')
         
@@ -698,19 +642,6 @@ def admin_callback(call):
                 text += f"• {name} (ID: `{uid}`)\n"
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode='Markdown')
         
-    elif action == "texts":
-        c.execute("SELECT user_id, text FROM user_texts LIMIT 20")
-        texts = c.fetchall()
-        if not texts:
-            text = "📭 هیچ متنی ذخیره نشده است."
-        else:
-            text = "📝 **آخرین متن‌های ذخیره شده:**\n\n"
-            for uid, txt in texts:
-                name = get_owner_name(uid)
-                short_txt = txt[:30] + "..." if len(txt) > 30 else txt
-                text += f"• {name} (ID: `{uid}`): {short_txt}\n"
-        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode='Markdown')
-        
     elif action == "clear":
         keyboard = InlineKeyboardMarkup()
         keyboard.add(
@@ -722,7 +653,7 @@ def admin_callback(call):
             "❗️ این عمل غیرقابل بازگشت است و تمام اطلاعات زیر حذف می‌شوند:\n"
             "• لیست کاربران\n"
             "• گزارش‌های تله\n"
-            "• عکس‌ها و متن‌های مچ‌گیری\n"
+            "• عکس‌های مچ‌گیری\n"
             "• تاریخچه کاربرانی که در تله افتاده‌اند",
             call.message.chat.id, call.message.message_id,
             reply_markup=keyboard, parse_mode='Markdown'
@@ -732,7 +663,6 @@ def admin_callback(call):
         c.execute("DELETE FROM users")
         c.execute("DELETE FROM pending_reports")
         c.execute("DELETE FROM user_photos")
-        c.execute("DELETE FROM user_texts")
         c.execute("DELETE FROM trapped_history")
         conn.commit()
         bot.edit_message_text(
