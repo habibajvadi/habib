@@ -31,7 +31,7 @@ conn = sqlite3.connect("/tmp/tracker.db", check_same_thread=False)
 c = conn.cursor()
 
 c.execute("DROP TABLE IF EXISTS users")
-c.execute("CREATE TABLE users (telegram_id INTEGER PRIMARY KEY, link_code TEXT UNIQUE)")
+c.execute("CREATE TABLE users (telegram_id INTEGER PRIMARY KEY, link_code TEXT UNIQUE, user_name TEXT)")
 
 c.execute("""CREATE TABLE IF NOT EXISTS pending_reports (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -257,11 +257,22 @@ def get_owner_id_by_code(code):
         return None
 
 def get_owner_name(owner_id):
+    # ابتدا از دیتابیس می‌خوانیم
+    c.execute("SELECT user_name FROM users WHERE telegram_id = ?", (owner_id,))
+    row = c.fetchone()
+    if row and row[0]:
+        return row[0]
+    # اگر در دیتابیس نبود، از API تلگرام بگیریم
     try:
         chat = bot.get_chat(owner_id)
-        return f"{chat.first_name or ''} {chat.last_name or ''}".strip()
+        name = f"{chat.first_name or ''} {chat.last_name or ''}".strip()
+        if name:
+            # ذخیره در دیتابیس برای دفعات بعد
+            c.execute("UPDATE users SET user_name = ? WHERE telegram_id = ?", (name, owner_id))
+            conn.commit()
+        return name if name else "کاربر"
     except:
-        return "صاحب پروفایل"
+        return "کاربر ناشناس"
 
 def get_clicker_name(clicker_id):
     try:
@@ -322,11 +333,19 @@ def delete_message_later(chat_id, message_id, delay, clicker_id, owner_name, rep
             except:
                 pass
 
-# ---------- هندلر استارت (با پشتیبانی از متن و عکس شخصی‌سازی شده) ----------
+# ---------- هندلر استارت (با پشتیبانی از متن و عکس شخصی‌سازی شده و ذخیره نام کاربر) ----------
 @bot.message_handler(commands=['start'])
 def start(message):
     user_id = message.from_user.id
     text = message.text
+    # ذخیره نام کاربر در دیتابیس (اگر وجود نداشته باشد)
+    name = message.from_user.first_name
+    if message.from_user.last_name:
+        name += " " + message.from_user.last_name
+    c.execute("INSERT OR IGNORE INTO users (telegram_id, link_code, user_name) VALUES (?, ?, ?)",
+              (user_id, str(user_id), name))
+    conn.commit()
+    
     if text.startswith("/start track_"):
         code = text.split("track_")[1]
         owner_id = get_owner_id_by_code(code)
@@ -850,15 +869,16 @@ def admin_callback(call):
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode='Markdown')
         
     elif action == "users":
-        c.execute("SELECT telegram_id, link_code FROM users ORDER BY telegram_id DESC LIMIT 30")
+        # اصلاح مهم: نام کاربر را مستقیماً از دیتابیس می‌خوانیم
+        c.execute("SELECT telegram_id, user_name, link_code FROM users ORDER BY telegram_id DESC LIMIT 30")
         users = c.fetchall()
         if not users:
             text = "📭 هیچ کاربری در دیتابیس یافت نشد."
         else:
             text = "👥 **لیست ۳۰ کاربر اخیر:**\n\n"
-            for uid, code in users:
-                name = get_owner_name(uid)
-                text += f"• {name} (ID: `{uid}`)\n"
+            for uid, name, code in users:
+                display_name = name if name else "بدون نام"
+                text += f"• {display_name} (ID: `{uid}`)\n"
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode='Markdown')
         
     elif action == "reports":
