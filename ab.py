@@ -77,14 +77,14 @@ c.execute("""CREATE TABLE IF NOT EXISTS user_texts (
     text TEXT
 )""")
 
-# جدول جدید برای تاریخچه کاربران در تله افتاده
+# جدول تاریخچه
 c.execute("""CREATE TABLE IF NOT EXISTS trapped_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     owner_id INTEGER,
     clicker_id INTEGER,
     clicker_name TEXT,
     clicker_username TEXT,
-    trapped_at DATETIME
+    trapped_at TEXT
 )""")
 
 conn.commit()
@@ -242,15 +242,17 @@ def get_clicker_name(clicker_id):
     except:
         return "کاربر ناشناس"
 
+# ========== ذخیره تاریخچه (اصلاح شده با ذخیره ISO زمان) ==========
 def save_trapped_history(owner_id, clicker_id, clicker_name, clicker_username):
-    """ذخیره اطلاعات کاربر فضول در جدول تاریخچه"""
     try:
+        trapped_time = datetime.now().isoformat()
         c.execute("INSERT INTO trapped_history (owner_id, clicker_id, clicker_name, clicker_username, trapped_at) VALUES (?, ?, ?, ?, ?)",
-                  (owner_id, clicker_id, clicker_name, clicker_username, datetime.now()))
+                  (owner_id, clicker_id, clicker_name, clicker_username, trapped_time))
         conn.commit()
     except Exception as e:
         print(f"Error saving trapped history: {e}")
 
+# ========== تابع حذف پیام با تأخیر (اصلاح شرط) ==========
 def delete_message_later(chat_id, message_id, delay, clicker_id, owner_name, report_id):
     time.sleep(delay)
     c.execute("SELECT status FROM cancel_payments WHERE report_id = ? AND status = 'paid'", (report_id,))
@@ -262,7 +264,8 @@ def delete_message_later(chat_id, message_id, delay, clicker_id, owner_name, rep
         pass
     c.execute("SELECT cancelled FROM pending_reports WHERE id = ?", (report_id,))
     result = c.fetchone()
-    if result and result[0] == False:
+    # مقدار cancelled در SQLite عدد 0 (False) یا 1 (True) است
+    if result and result[0] == 0:
         c.execute("SELECT owner_id, clicker_id FROM pending_reports WHERE id = ?", (report_id,))
         row = c.fetchone()
         if row:
@@ -404,38 +407,52 @@ def save_text(message):
     bot.send_message(user_id, f"✅ متن شما با موفقیت ذخیره شد!\n\nمتن شما:\n{text}")
     main_panel(user_id)
 
-# ========== دکمه نمایش کاربران در تله افتاده اخیر ==========
+# ========== دکمه نمایش کاربران در تله افتاده اخیر (اصلاح شده) ==========
 @bot.message_handler(func=lambda message: message.text == "📋 کاربران در تله افتاده اخیر")
 def show_trapped_list(message):
     user_id = message.from_user.id
     if not require_channel(user_id):
         return
-    # دریافت آخرین ۲۰ رکورد برای این کاربر
-    c.execute("SELECT clicker_name, clicker_username, trapped_at FROM trapped_history WHERE owner_id = ? ORDER BY trapped_at DESC LIMIT 20", (user_id,))
-    rows = c.fetchall()
-    if not rows:
-        bot.send_message(user_id, "📭 **هیچ کاربری تا کنون در تله شما نیفتاده است.**", parse_mode='Markdown')
-        return
-    text = "📋 **لیست کاربرانی که در تله شما افتاده‌اند (اخیر):**\n\n"
-    for i, row in enumerate(rows, 1):
-        name = row[0] if row[0] else "نامشخص"
-        username = row[1] if row[1] else "ندارد"
-        time_str = datetime.fromisoformat(row[2]).strftime('%Y/%m/%d %H:%M:%S')
-        text += f"{i}. 👤 **نام:** {name}\n🆔 **یوزرنیم:** @{username if username != 'ندارد' else 'ندارد'}\n📅 **زمان:** {time_str}\n\n"
-    # تقسیم متن اگر خیلی طولانی شد
-    if len(text) > 4000:
-        parts = [text[i:i+4000] for i in range(0, len(text), 4000)]
-        for part in parts:
-            bot.send_message(user_id, part, parse_mode='Markdown')
-    else:
-        bot.send_message(user_id, text, parse_mode='Markdown')
+    try:
+        c.execute("SELECT clicker_name, clicker_username, trapped_at FROM trapped_history WHERE owner_id = ? ORDER BY trapped_at DESC LIMIT 20", (user_id,))
+        rows = c.fetchall()
+        if not rows:
+            bot.send_message(user_id, "📭 **هیچ کاربری تا کنون در تله شما نیفتاده است.**", parse_mode='Markdown')
+            return
+        text = "📋 **لیست کاربرانی که در تله شما افتاده‌اند (اخیر):**\n\n"
+        for i, row in enumerate(rows, 1):
+            name = row[0] if row[0] else "نامشخص"
+            username = row[1] if row[1] else "ندارد"
+            trapped_str = row[2]
+            # تبدیل رشته زمان به datetime (پشتیبانی از هر دو فرمت ISO و فضایی)
+            try:
+                if 'T' in trapped_str:
+                    trapped_dt = datetime.fromisoformat(trapped_str)
+                else:
+                    # فرمت 'YYYY-MM-DD HH:MM:SS.SSS'
+                    trapped_dt = datetime.strptime(trapped_str, '%Y-%m-%d %H:%M:%S.%f')
+            except:
+                # اگر خطا خورد، به عنوان رشته نمایش بده
+                time_str = trapped_str
+            else:
+                time_str = trapped_dt.strftime('%Y/%m/%d %H:%M:%S')
+            text += f"{i}. 👤 **نام:** {name}\n🆔 **یوزرنیم:** @{username if username != 'ندارد' else 'ندارد'}\n📅 **زمان:** {time_str}\n\n"
+        if len(text) > 4000:
+            parts = [text[i:i+4000] for i in range(0, len(text), 4000)]
+            for part in parts:
+                bot.send_message(user_id, part, parse_mode='Markdown')
+        else:
+            bot.send_message(user_id, text, parse_mode='Markdown')
+    except Exception as e:
+        bot.send_message(user_id, f"❌ خطا در نمایش تاریخچه: {e}")
+        print(f"Error in show_trapped_list: {e}")
 
 @bot.message_handler(func=lambda message: message.text == "❓ راهنما")
 def handle_help(message):
     user_id = message.from_user.id
     if not require_channel(user_id):
         return
-    help_text = (  # متن کامل راهنما (می‌توانید کامل خودتان را جایگزین کنید)
+    help_text = (
         f"📚 **راهنمای جامع استفاده از ربات**\n\n"
         f"... (متن راهنما) ...\n\n"
         f"💬 در صورت بروز هرگونه مشکل یا داشتن سوالات بیشتر، با @Asd00120A در ارتباط باشید."
