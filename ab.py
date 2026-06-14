@@ -1,4 +1,3 @@
-
 import sqlite3
 import threading
 import time
@@ -532,10 +531,11 @@ def send_pv(call):
         chat = bot.get_chat(clicker_id)
         username = chat.username
         if username:
-            user_info = f"🆔 **آیدی کاربر فضول:**\n@{username}"
+            user_info = f"🆔 آیدی کاربر فضول:\n@{username}"
         else:
-            user_info = f"🆔 **آیدی کاربر فضول:**\n`{clicker_id}`"
-        bot.send_message(call.message.chat.id, user_info, parse_mode='Markdown')
+            user_info = f"🆔 آیدی کاربر فضول:\n{clicker_id}"
+        # حذف parse_mode=Markdown برای جلوگیری از خطای کاراکترهای خاص
+        bot.send_message(call.message.chat.id, user_info)
     except Exception as e:
         bot.send_message(call.message.chat.id, f"❌ امکان دریافت آیدی کاربر وجود ندارد.\nخطا: {e}")
 
