@@ -404,26 +404,25 @@ def save_text(message):
     bot.send_message(user_id, f"✅ متن شما با موفقیت ذخیره شد!\n\nمتن شما:\n{text}")
     main_panel(user_id)
 
-# ========== دکمه نمایش کاربران در تله افتاده اخیر (فقط ۱۵ روز گذشته) ==========
+# ========== دکمه نمایش کاربران در تله افتاده اخیر ==========
 @bot.message_handler(func=lambda message: message.text == "📋 کاربران در تله افتاده اخیر")
 def show_trapped_list(message):
     user_id = message.from_user.id
     if not require_channel(user_id):
         return
-    # محاسبه ۱۵ روز قبل
-    fifteen_days_ago = datetime.now() - timedelta(days=15)
-    c.execute("SELECT clicker_name, clicker_username, trapped_at FROM trapped_history WHERE owner_id = ? AND trapped_at >= ? ORDER BY trapped_at DESC LIMIT 20", 
-              (user_id, fifteen_days_ago))
+    # دریافت آخرین ۲۰ رکورد برای این کاربر
+    c.execute("SELECT clicker_name, clicker_username, trapped_at FROM trapped_history WHERE owner_id = ? ORDER BY trapped_at DESC LIMIT 20", (user_id,))
     rows = c.fetchall()
     if not rows:
-        bot.send_message(user_id, "📭 **هیچ کاربری در ۱۵ روز گذشته در تله شما نیفتاده است.**", parse_mode='Markdown')
+        bot.send_message(user_id, "📭 **هیچ کاربری تا کنون در تله شما نیفتاده است.**", parse_mode='Markdown')
         return
-    text = "📋 **لیست کاربرانی که در ۱۵ روز گذشته در تله شما افتاده‌اند:**\n\n"
+    text = "📋 **لیست کاربرانی که در تله شما افتاده‌اند (اخیر):**\n\n"
     for i, row in enumerate(rows, 1):
         name = row[0] if row[0] else "نامشخص"
         username = row[1] if row[1] else "ندارد"
         time_str = datetime.fromisoformat(row[2]).strftime('%Y/%m/%d %H:%M:%S')
         text += f"{i}. 👤 **نام:** {name}\n🆔 **یوزرنیم:** @{username if username != 'ندارد' else 'ندارد'}\n📅 **زمان:** {time_str}\n\n"
+    # تقسیم متن اگر خیلی طولانی شد
     if len(text) > 4000:
         parts = [text[i:i+4000] for i in range(0, len(text), 4000)]
         for part in parts:
