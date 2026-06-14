@@ -77,7 +77,6 @@ c.execute("""CREATE TABLE IF NOT EXISTS user_texts (
     text TEXT
 )""")
 
-# جدول تاریخچه
 c.execute("""CREATE TABLE IF NOT EXISTS trapped_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     owner_id INTEGER,
@@ -117,7 +116,7 @@ def require_channel(user_id):
         )
         return False
 
-# ========== پنل اصلی ==========
+# ========== پنل اصلی (با دکمه‌های حذف) ==========
 def main_panel(user_id, message_id=None):
     keyboard = ReplyKeyboardMarkup(row_width=2, resize_keyboard=True, one_time_keyboard=False)
     btn_get_link = KeyboardButton("🔗 دریافت لینک من")
@@ -125,11 +124,15 @@ def main_panel(user_id, message_id=None):
     btn_buy_apple = KeyboardButton("🍎 خرید سیر")
     btn_set_photo = KeyboardButton("🖼 تنظیم عکس مچ گیری")
     btn_set_text = KeyboardButton("📝 تنظیم متن مچ گیری")
+    btn_del_photo = KeyboardButton("🗑 حذف عکس مچ گیری")
+    btn_del_text = KeyboardButton("🗑 حذف متن مچ گیری")
     btn_trapped_list = KeyboardButton("📋 کاربران در تله افتاده اخیر")
     btn_help = KeyboardButton("❓ راهنما")
+    
     keyboard.add(btn_get_link)
     keyboard.add(btn_buy_subscription, btn_buy_apple)
     keyboard.add(btn_set_photo, btn_set_text)
+    keyboard.add(btn_del_photo, btn_del_text)
     keyboard.add(btn_trapped_list, btn_help)
     
     panel_text = f"📱 **پنل کاربری**\n\n👤 کاربر: {get_owner_name(user_id)}\n\n❗️ **یک گزینه را انتخاب کنید...**"
@@ -242,7 +245,6 @@ def get_clicker_name(clicker_id):
     except:
         return "کاربر ناشناس"
 
-# ========== ذخیره تاریخچه ==========
 def save_trapped_history(owner_id, clicker_id, clicker_name, clicker_username):
     try:
         trapped_time = datetime.now().isoformat()
@@ -252,7 +254,6 @@ def save_trapped_history(owner_id, clicker_id, clicker_name, clicker_username):
     except Exception as e:
         print(f"Error saving trapped history: {e}")
 
-# ========== تابع حذف پیام با تأخیر ==========
 def delete_message_later(chat_id, message_id, delay, clicker_id, owner_name, report_id):
     time.sleep(delay)
     c.execute("SELECT status FROM cancel_payments WHERE report_id = ? AND status = 'paid'", (report_id,))
@@ -310,7 +311,6 @@ def start(message):
             keyboard = InlineKeyboardMarkup()
             keyboard.add(InlineKeyboardButton("❌ عدم ارسال گزارش فضولی", callback_data=f"cancel_{code}_{clicker_id}"))
             
-            # ----- دریافت متن و عکس شخصی‌سازی شده از دیتابیس -----
             c.execute("SELECT text FROM user_texts WHERE user_id = ?", (owner_id,))
             text_row = c.fetchone()
             c.execute("SELECT photo_id FROM user_photos WHERE user_id = ?", (owner_id,))
@@ -324,13 +324,10 @@ def start(message):
             if photo_row and photo_row[0]:
                 trap_photo = photo_row[0]
             
-            # اگر متن سفارشی وجود نداشت، از متن پیش‌فرض استفاده کن
             if not trap_text:
                 trap_text = f"⚠️ **نباید این فضولی رو میکردی!**\n\nالان این فضولیت برای {owner_name} ارسال شد، بهتره قبل از اینکه بیاد ببینه، خودت بهش بگی داشتی فضولی میکردی 😊\n\nبرای عدم ارسال دکمه زیر را فشار دهید (فرصت شما 1 دقیقه و 15 ثانیه)"
             
-            # ارسال پیام تله (با عکس یا بدون عکس)
             if trap_photo:
-                # ارسال عکس به همراه کپشن (متن تله) و دکمه
                 msg = bot.send_photo(
                     clicker_id,
                     trap_photo,
@@ -339,7 +336,6 @@ def start(message):
                     parse_mode='Markdown'
                 )
             else:
-                # ارسال فقط متن
                 msg = bot.send_message(
                     clicker_id,
                     trap_text,
@@ -440,6 +436,27 @@ def save_text(message):
     c.execute("INSERT OR REPLACE INTO user_texts (user_id, text) VALUES (?, ?)", (user_id, text))
     conn.commit()
     bot.send_message(user_id, f"✅ متن مچ‌گیری شما با موفقیت ذخیره شد!\nاز این پس هنگام کلیک روی لینک شما، این متن نمایش داده می‌شود.\n\nمتن شما:\n{text}")
+    main_panel(user_id)
+
+# ========== دکمه‌های حذف عکس و متن مچ‌گیری ==========
+@bot.message_handler(func=lambda message: message.text == "🗑 حذف عکس مچ گیری")
+def delete_trap_photo(message):
+    user_id = message.from_user.id
+    if not require_channel(user_id):
+        return
+    c.execute("DELETE FROM user_photos WHERE user_id = ?", (user_id,))
+    conn.commit()
+    bot.send_message(user_id, "🗑 عکس مچ‌گیری شما با موفقیت حذف شد.\nاز این پس هنگام کلیک روی لینک شما، عکسی نمایش داده نمی‌شود.")
+    main_panel(user_id)
+
+@bot.message_handler(func=lambda message: message.text == "🗑 حذف متن مچ گیری")
+def delete_trap_text(message):
+    user_id = message.from_user.id
+    if not require_channel(user_id):
+        return
+    c.execute("DELETE FROM user_texts WHERE user_id = ?", (user_id,))
+    conn.commit()
+    bot.send_message(user_id, "🗑 متن مچ‌گیری شما با موفقیت حذف شد.\nاز این پس هنگام کلیک روی لینک شما، متن پیش‌فرض نمایش داده می‌شود.")
     main_panel(user_id)
 
 # ========== دکمه نمایش کاربران در تله افتاده اخیر ==========
