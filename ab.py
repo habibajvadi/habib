@@ -17,12 +17,6 @@ BASE_URL = "https://habib-q5vo.onrender.com"
 # ---------- کانال الزامی ----------
 REQUIRED_CHANNEL = "@film01385"
 
-# زرین‌پال
-ZP_MERCHANT_ID = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-ZP_REQUEST_URL = "https://api.zarinpal.com/pg/v4/payment/request.json"
-ZP_VERIFY_URL = "https://api.zarinpal.com/pg/v4/payment/verify.json"
-ZP_START_PAY = "https://www.zarinpal.com/pg/StartPay/"
-
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
@@ -43,20 +37,7 @@ c.execute("""CREATE TABLE IF NOT EXISTS pending_reports (
     cancelled BOOLEAN DEFAULT FALSE
 )""")
 
-c.execute("""CREATE TABLE IF NOT EXISTS subscriptions (
-    user_id INTEGER PRIMARY KEY,
-    expires_at DATETIME
-)""")
-
-c.execute("""CREATE TABLE IF NOT EXISTS pending_payments (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    authority TEXT UNIQUE,
-    amount INTEGER,
-    days INTEGER,
-    created_at DATETIME
-)""")
-
+# جدول پرداخت‌های لغو گزارش (برای fake_pay)
 c.execute("""CREATE TABLE IF NOT EXISTS cancel_payments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     report_id INTEGER,
@@ -116,11 +97,10 @@ def require_channel(user_id):
         )
         return False
 
-# ========== پنل اصلی (با دکمه‌های حذف) ==========
+# ========== پنل اصلی (بدون دکمه اشتراک) ==========
 def main_panel(user_id, message_id=None):
     keyboard = ReplyKeyboardMarkup(row_width=2, resize_keyboard=True, one_time_keyboard=False)
     btn_get_link = KeyboardButton("🔗 دریافت لینک من")
-    btn_buy_subscription = KeyboardButton("💰 خرید اشتراک پرو")
     btn_buy_apple = KeyboardButton("🍎 خرید سیر")
     btn_set_photo = KeyboardButton("🖼 تنظیم عکس مچ گیری")
     btn_set_text = KeyboardButton("📝 تنظیم متن مچ گیری")
@@ -130,7 +110,7 @@ def main_panel(user_id, message_id=None):
     btn_help = KeyboardButton("❓ راهنما")
     
     keyboard.add(btn_get_link)
-    keyboard.add(btn_buy_subscription, btn_buy_apple)
+    keyboard.add(btn_buy_apple)
     keyboard.add(btn_set_photo, btn_set_text)
     keyboard.add(btn_del_photo, btn_del_text)
     keyboard.add(btn_trapped_list, btn_help)
@@ -144,79 +124,6 @@ def main_panel(user_id, message_id=None):
             bot.send_message(user_id, panel_text, reply_markup=keyboard, parse_mode='Markdown')
     else:
         bot.send_message(user_id, panel_text, reply_markup=keyboard, parse_mode='Markdown')
-
-# ---------- توابع اشتراک و پرداخت (بدون تغییر) ----------
-def has_active_subscription(user_id):
-    c.execute("SELECT expires_at FROM subscriptions WHERE user_id = ?", (user_id,))
-    row = c.fetchone()
-    if row:
-        expires_at = datetime.fromisoformat(row[0])
-        if expires_at > datetime.now():
-            return True
-        else:
-            c.execute("DELETE FROM subscriptions WHERE user_id = ?", (user_id,))
-            conn.commit()
-    return False
-
-def add_subscription(user_id, days):
-    current = datetime.now()
-    c.execute("SELECT expires_at FROM subscriptions WHERE user_id = ?", (user_id,))
-    row = c.fetchone()
-    if row:
-        old_expires = datetime.fromisoformat(row[0])
-        if old_expires > current:
-            new_expires = old_expires + timedelta(days=days)
-        else:
-            new_expires = current + timedelta(days=days)
-    else:
-        new_expires = current + timedelta(days=days)
-    c.execute("INSERT OR REPLACE INTO subscriptions (user_id, expires_at) VALUES (?, ?)",
-              (user_id, new_expires.isoformat()))
-    conn.commit()
-    return new_expires
-
-def get_subscription_info(user_id):
-    c.execute("SELECT expires_at FROM subscriptions WHERE user_id = ?", (user_id,))
-    row = c.fetchone()
-    if row:
-        return datetime.fromisoformat(row[0])
-    return None
-
-def create_payment_link(user_id, amount, days):
-    authority = str(uuid.uuid4()).replace("-", "")[:20]
-    callback_url = f"{BASE_URL}/verify?user_id={user_id}&days={days}"
-    data = {
-        "merchant_id": ZP_MERCHANT_ID,
-        "amount": amount,
-        "callback_url": callback_url,
-        "description": f"خرید اشتراک {days} روزه ربات تله",
-        "metadata": {"mobile": "", "email": ""}
-    }
-    try:
-        response = requests.post(ZP_REQUEST_URL, json=data)
-        result = response.json()
-        if result.get("data", {}).get("code") == 100:
-            authority = result["data"]["authority"]
-            c.execute("INSERT INTO pending_payments (user_id, authority, amount, days, created_at) VALUES (?, ?, ?, ?, ?)",
-                      (user_id, authority, amount, days, datetime.now().isoformat()))
-            conn.commit()
-            return f"{ZP_START_PAY}{authority}", None
-        else:
-            return None, "خطا در اتصال به درگاه پرداخت"
-    except Exception as e:
-        return None, str(e)
-
-def verify_payment(authority, amount):
-    data = {"merchant_id": ZP_MERCHANT_ID, "amount": amount, "authority": authority}
-    try:
-        response = requests.post(ZP_VERIFY_URL, json=data)
-        result = response.json()
-        if result.get("data", {}).get("code") == 100:
-            return True, result["data"]["ref_id"]
-        else:
-            return False, result.get("errors", {}).get("code", "خطا")
-    except Exception as e:
-        return False, str(e)
 
 # ---------- توابع اصلی ----------
 def generate_link(telegram_id):
@@ -297,7 +204,7 @@ def delete_message_later(chat_id, message_id, delay, clicker_id, owner_name, rep
             except:
                 pass
 
-# ---------- هندلر استارت (با پشتیبانی از متن و عکس شخصی‌سازی شده) ----------
+# ---------- هندلر استارت ----------
 @bot.message_handler(commands=['start'])
 def start(message):
     user_id = message.from_user.id
@@ -376,22 +283,6 @@ def copy_link_callback(call):
     bot.answer_callback_query(call.id, "✅ لینک با موفقیت کپی شد! (روی لینک نگه دارید و کپی کنید)", show_alert=True)
 
 # ---------- دکمه‌های پنل ----------
-@bot.message_handler(func=lambda message: message.text == "💰 خرید اشتراک پرو")
-def handle_buy_subscription(message):
-    user_id = message.from_user.id
-    if not require_channel(user_id):
-        return
-    info = get_subscription_info(user_id)
-    keyboard = InlineKeyboardMarkup(row_width=1)
-    keyboard.add(
-        InlineKeyboardButton("💰 اشتراک ۱ ماهه - ۱۰,۰۰۰ تومان", callback_data="pay_30_10000"),
-        InlineKeyboardButton("💰 اشتراک ۳ ماهه - ۲۵,۰۰۰ تومان", callback_data="pay_90_25000"),
-        InlineKeyboardButton("💰 اشتراک ۶ ماهه - ۴۵,۰۰۰ تومان", callback_data="pay_180_45000"),
-        InlineKeyboardButton("🔙 بازگشت به پنل", callback_data="back_to_panel")
-    )
-    status = f"✅ اشتراک فعال تا {info.strftime('%Y/%m/%d')} ({(info - datetime.now()).days} روز باقی مونده)" if info else "❌ اشتراک فعالی ندارید"
-    bot.send_message(user_id, f"💳 **خرید اشتراک**\n\n{status}\n\nیکی از گزینه‌های زیر را انتخاب کنید:", reply_markup=keyboard, parse_mode='Markdown')
-
 @bot.message_handler(func=lambda message: message.text == "🍎 خرید سیر")
 def handle_buy_apple(message):
     user_id = message.from_user.id
@@ -496,7 +387,7 @@ def show_trapped_list(message):
         bot.send_message(user_id, f"❌ خطا در نمایش تاریخچه: {e}")
         print(f"Error in show_trapped_list: {e}")
 
-# ========== دکمه راهنما با متن جدید ==========
+# ========== دکمه راهنما ==========
 @bot.message_handler(func=lambda message: message.text == "❓ راهنما")
 def handle_help(message):
     user_id = message.from_user.id
@@ -513,18 +404,13 @@ def handle_help(message):
         "▫️ آیدی (لینک ورود به پیوی)\n"
         "▫️ عکس پروفایل\n"
         "▫️ بیوگرافی (در صورت وجود)\n\n"
-        "**۲. اشتراک ویژه (پرو - ۳۰ روزه):**\n"
-        "با تهیه اشتراک پرو، امکانات پیشرفته زیر در اختیار شما قرار می‌گیرد:\n"
+        "**۲. امکانات رایگان (بدون نیاز به اشتراک):**\n"
         "🔹 **ارسال پیام ناشناس:** می‌توانید از طریق ربات، برای شخصی که در تله شما افتاده است به صورت کاملاً ناشناس پیام ارسال کنید.\n"
-        "🔹 **مشاهده پروفایل افراد بدون آیدی:** اگر شخصی که در تله افتاده آیدی عمومی (Username) نداشته باشد، با اشتراک پرو همچنان می‌توانید عکس پروفایل و بیوگرافی او را مشاهده کنید.\n\n"
+        "🔹 **مشاهده بیوگرافی و عکس پروفایل و آیدی کاربران:** همه این قابلیت‌ها به صورت رایگان در دسترس است.\n\n"
         "**۳. شخصی‌سازی تله (متن و عکس مچ‌گیری):**\n"
         "شما می‌توانید واکنش ربات به فردی که در تله می‌افتد را کاملاً شخصی‌سازی کنید:\n"
         "🔹 **تنظیم متن مچ‌گیری:** پیامی که فرد به محض کلیک روی لینک شما دریافت می‌کند را تغییر دهید.\n"
         "🔹 **تنظیم عکس مچ‌گیری:** علاوه بر متن، می‌توانید یک تصویر دلخواه تنظیم کنید تا به محض ورود شخص، آن عکس نیز برای وی ارسال شود.\n\n"
-        "**۴. اشتراک سپر (محافظت و مچ‌گیری آنی):**\n"
-        "داشتن اشتراک سپر، امنیت و سرعت شما را به حداکثر می‌رساند:\n"
-        "🔹 **محافظت از شما:** اگر خودتان روی لینک شخص دیگری کلیک کنید و در تله بیفتید، گزارش ورود شما کاملاً مسدود شده و برای طرف مقابل ارسال نخواهد شد.\n"
-        "🔹 **گزارش آنی و قطعی:** به محض اینکه شخصی در تله شما بیفتد، گزارش آن بدون هیچ وقفه‌ای و به صورت آنی برای شما ارسال می‌شود و نیاز به پرداخت موردی برای دیدن شکار از بین می‌رود.\n\n"
         "💬 در صورت بروز هرگونه مشکل یا داشتن سوالات بیشتر، با @Asd00120A در ارتباط باشید."
     )
     keyboard = InlineKeyboardMarkup()
@@ -692,86 +578,6 @@ def show_photo(call):
             bot.send_message(call.message.chat.id, "❌ این کاربر عکس پروفایل ندارد.")
     except:
         bot.send_message(call.message.chat.id, "❌ امکان نمایش عکس وجود ندارد.")
-
-# ========== خرید اشتراک (زرین‌پال) ==========
-@bot.callback_query_handler(func=lambda call: call.data.startswith("pay_"))
-def handle_payment(call):
-    _, days, amount = call.data.split("_")
-    days, amount = int(days), int(amount)
-    user_id = call.from_user.id
-    bot.answer_callback_query(call.id, "در حال ساخت لینک پرداخت...")
-    pay_link, error = create_payment_link(user_id, amount, days)
-    if pay_link:
-        keyboard = InlineKeyboardMarkup()
-        keyboard.add(InlineKeyboardButton("💳 پرداخت آنلاین", url=pay_link), InlineKeyboardButton("🔙 بازگشت به پنل", callback_data="back_to_panel"))
-        bot.send_message(user_id, f"✅ لینک پرداخت ساخته شد.\n\n💰 مبلغ: {amount:,} تومان\n📅 مدت: {days} روز\n\n🔗 روی دکمه زیر بزن تا به درگاه پرداخت بری.\nبعد از پرداخت، اشتراکت خودکار فعال میشه.",
-                         reply_markup=keyboard, parse_mode='Markdown')
-    else:
-        bot.send_message(user_id, f"❌ خطا در ساخت لینک پرداخت: {error}\nلطفاً بعداً تلاش کن.")
-
-@app.route('/verify', methods=['GET'])
-def verify_payment_route():
-    user_id = request.args.get('user_id')
-    days = request.args.get('days')
-    authority = request.args.get('Authority')
-    status = request.args.get('Status')
-    if not user_id or not days or not authority:
-        return "پارامترهای ناقص", 400
-    user_id, days = int(user_id), int(days)
-    if status != "OK":
-        return "پرداخت ناموفق یا توسط کاربر لغو شده است", 400
-    c.execute("SELECT amount FROM pending_payments WHERE authority = ? AND user_id = ?", (authority, user_id))
-    row = c.fetchone()
-    if not row:
-        return "تراکنش یافت نشد", 404
-    amount = row[0]
-    success, ref_id = verify_payment(authority, amount)
-    if success:
-        new_expires = add_subscription(user_id, days)
-        c.execute("DELETE FROM pending_payments WHERE authority = ?", (authority,))
-        conn.commit()
-        try:
-            bot.send_message(user_id, f"✅ **پرداخت شما با موفقیت تایید شد!**\n\n🎉 اشتراک {days} روزه شما فعال شد.\n📅 اعتبار تا {new_expires.strftime('%Y/%m/%d')}", parse_mode='Markdown')
-            main_panel(user_id)
-        except:
-            pass
-        return f"پرداخت با موفقیت تایید شد. کد رهگیری: {ref_id}", 200
-    else:
-        return f"پرداخت تایید نشد. کد خطا: {ref_id}", 400
-
-@app.route('/verify_cancel', methods=['GET'])
-def verify_cancel_payment():
-    user_id = request.args.get('user_id')
-    report_id = request.args.get('report_id')
-    authority = request.args.get('Authority')
-    status = request.args.get('Status')
-    if not user_id or not report_id or not authority:
-        return "پارامترهای ناقص", 400
-    user_id, report_id = int(user_id), int(report_id)
-    if status != "OK":
-        return "پرداخت ناموفق یا توسط کاربر لغو شده است", 400
-    c.execute("SELECT amount FROM cancel_payments WHERE authority = ? AND user_id = ? AND report_id = ?", (authority, user_id, report_id))
-    row = c.fetchone()
-    if not row:
-        return "تراکنش یافت نشد", 404
-    amount = row[0]
-    data = {"merchant_id": ZP_MERCHANT_ID, "amount": amount, "authority": authority}
-    try:
-        response = requests.post(ZP_VERIFY_URL, json=data)
-        result = response.json()
-        if result.get("data", {}).get("code") == 100:
-            c.execute("UPDATE cancel_payments SET status = 'paid' WHERE authority = ?", (authority,))
-            c.execute("UPDATE pending_reports SET cancelled = TRUE WHERE id = ?", (report_id,))
-            conn.commit()
-            try:
-                bot.send_message(user_id, "✅ **پرداخت شما با موفقیت تایید شد!**\n\nگزارش فضولی شما لغو گردید.", parse_mode='Markdown')
-            except:
-                pass
-            return f"✅ پرداخت موفق. کد رهگیری: {result['data']['ref_id']}", 200
-        else:
-            return f"❌ پرداخت تایید نشد. کد خطا: {result.get('errors', {}).get('code', 'unknown')}", 400
-    except Exception as e:
-        return f"خطا: {e}", 500
 
 # ---------- مسیرهای Flask ----------
 @app.route('/webhook', methods=['POST'])
