@@ -10,7 +10,7 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeybo
 import os
 
 # ---------- تنظیمات ----------
-TOKEN = "8981742192:AAHC8z6u6GifXgMIafvzv0tn_Q2LV1mM2bQ"
+TOKEN = "8981742192:AAHC8z6u6GifXgMIafvzv0tn_Q2LV1mM2bQ" 
 BOT_USERNAME = "nevergivup_bot"
 BASE_URL = "https://habib-q5vo.onrender.com"
 
