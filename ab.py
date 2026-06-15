@@ -15,7 +15,7 @@ BOT_USERNAME = "staystrongs_bot"
 BASE_URL = "https://habib-q5vo.onrender.com"
 
 # ---------- کانال الزامی ----------
-REQUIRED_CHANNEL = "@film01385"
+REQUIRED_CHANNEL = "@film001385"
 
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
