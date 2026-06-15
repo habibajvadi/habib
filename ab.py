@@ -14,9 +14,6 @@ TOKEN = "8814873551:AAG-SGCNsBoiVjWLRTBx83Buc-RYWt5MIOw"
 BOT_USERNAME = "staystrongs_bot"
 BASE_URL = "https://habib-q5vo.onrender.com"
 
-# ---------- کانال الزامی ----------
-REQUIRED_CHANNEL = "@film001385"
-
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
@@ -84,32 +81,6 @@ def get_total_trapped():
 def get_total_photos():
     c.execute("SELECT COUNT(*) FROM user_photos")
     return c.fetchone()[0]
-
-# ========== بررسی عضویت در کانال ==========
-def check_membership(user_id):
-    try:
-        member = bot.get_chat_member(REQUIRED_CHANNEL, user_id)
-        return member.status in ['member', 'administrator', 'creator']
-    except:
-        return False
-
-def require_channel(user_id):
-    if check_membership(user_id):
-        return True
-    else:
-        keyboard = InlineKeyboardMarkup()
-        keyboard.add(InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/{REQUIRED_CHANNEL.replace('@', '')}"))
-        keyboard.add(InlineKeyboardButton("✅ بررسی عضویت", callback_data="check_membership"))
-        bot.send_message(
-            user_id,
-            f"❌ **دسترسی محدود شده**\n\n"
-            f"برای استفاده از امکانات ربات، ابتدا باید در کانال زیر عضو شوید:\n\n"
-            f"🔗 {REQUIRED_CHANNEL}\n\n"
-            f"پس از عضویت، روی دکمه «بررسی عضویت» کلیک کنید.",
-            reply_markup=keyboard,
-            parse_mode='Markdown'
-        )
-        return False
 
 # ========== پنل اصلی (بدون دکمه‌های متن) ==========
 def main_panel(user_id, message_id=None):
@@ -274,8 +245,6 @@ def start(message):
 @bot.message_handler(func=lambda message: message.text == "🔗 دریافت لینک من")
 def handle_get_my_link(message):
     user_id = message.from_user.id
-    if not require_channel(user_id):
-        return
     link = generate_link(user_id)
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("📋 کپی لینک", callback_data=f"copy_link_{link}"))
@@ -291,8 +260,6 @@ def copy_link_callback(call):
 @bot.message_handler(func=lambda message: message.text == "🍎 خرید سیر")
 def handle_buy_apple(message):
     user_id = message.from_user.id
-    if not require_channel(user_id):
-        return
     hide_keyboard = ReplyKeyboardRemove()
     bot.send_message(user_id, "🍎 **خرید سیر**\n\nاین قابلیت به زودی اضافه می‌شود.\nبرای بازگشت به پنل، روی /start کلیک کنید.", reply_markup=hide_keyboard, parse_mode='Markdown')
     threading.Timer(2, lambda: main_panel(user_id)).start()
@@ -300,8 +267,6 @@ def handle_buy_apple(message):
 @bot.message_handler(func=lambda message: message.text == "🖼 تنظیم عکس مچ گیری")
 def handle_set_photo(message):
     user_id = message.from_user.id
-    if not require_channel(user_id):
-        return
     hide_keyboard = ReplyKeyboardRemove()
     bot.send_message(user_id, "🖼 **تنظیم عکس مچ گیری**\n\nلطفاً عکس مورد نظر خود را ارسال کنید:", reply_markup=hide_keyboard, parse_mode='Markdown')
     bot.register_next_step_handler(message, save_photo)
@@ -321,8 +286,6 @@ def save_photo(message):
 @bot.message_handler(func=lambda message: message.text == "🗑 حذف عکس مچ گیری")
 def delete_trap_photo(message):
     user_id = message.from_user.id
-    if not require_channel(user_id):
-        return
     c.execute("DELETE FROM user_photos WHERE user_id = ?", (user_id,))
     conn.commit()
     bot.send_message(user_id, "🗑 عکس مچ‌گیری شما با موفقیت حذف شد.\nاز این پس هنگام کلیک روی لینک شما، عکسی نمایش داده نمی‌شود.")
@@ -332,8 +295,6 @@ def delete_trap_photo(message):
 @bot.message_handler(func=lambda message: message.text == "📋 کاربران در تله افتاده اخیر")
 def show_trapped_list(message):
     user_id = message.from_user.id
-    if not require_channel(user_id):
-        return
     try:
         c.execute("SELECT clicker_name, clicker_username, trapped_at FROM trapped_history WHERE owner_id = ? ORDER BY trapped_at DESC LIMIT 20", (user_id,))
         rows = c.fetchall()
@@ -369,8 +330,6 @@ def show_trapped_list(message):
 @bot.message_handler(func=lambda message: message.text == "❓ راهنما")
 def handle_help(message):
     user_id = message.from_user.id
-    if not require_channel(user_id):
-        return
     help_text = (
         "📚 **راهنمای جامع استفاده از ربات**\n\n"
         "با سلام و احترام. به بخش راهنمای ربات خوش آمدید. در این بخش با تمامی امکانات و نحوه عملکرد دقیق ربات آشنا خواهید شد:\n\n"
@@ -485,19 +444,6 @@ def show_details(call):
     bot.answer_callback_query(call.id)
     details_msg = "📋 **جزئیات پرداخت**\n\n💰 مبلغ: ۶,۵۰۰ تومان (۶۵,۰۰۰ ریال)\n📝 دلیل: لغو ارسال گزارش فضولی\n⏱ زمان باقی مانده: کمتر از ۷۵ ثانیه\n\nپس از پرداخت موفق، گزارش شما ارسال نخواهد شد."
     bot.send_message(call.message.chat.id, details_msg, parse_mode='Markdown')
-
-@bot.callback_query_handler(func=lambda call: call.data == "check_membership")
-def check_membership_callback(call):
-    user_id = call.from_user.id
-    if check_membership(user_id):
-        bot.answer_callback_query(call.id, "✅ عضویت شما تأیید شد! حالا می‌توانید از ربات استفاده کنید.")
-        try:
-            bot.delete_message(call.message.chat.id, call.message.message_id)
-        except:
-            pass
-        main_panel(user_id)
-    else:
-        bot.answer_callback_query(call.id, "❌ شما هنوز عضو کانال نشده‌اید!", show_alert=True)
 
 @bot.callback_query_handler(func=lambda call: call.data == "back_to_panel")
 def back_to_panel_inline(call):
