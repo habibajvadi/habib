@@ -63,7 +63,7 @@ conn.commit()
 anonymous_temp = {}
 
 # ========== مدیران ربات ==========
-ADMIN_IDS = [8521463103, 5333419558]  # آیدی‌های عددی خود را جایگزین کنید
+ADMIN_IDS = [8521463103, 5333419558]
 
 # ========== توابع کمکی برای آمار ==========
 def get_total_users():
@@ -82,7 +82,7 @@ def get_total_photos():
     c.execute("SELECT COUNT(*) FROM user_photos")
     return c.fetchone()[0]
 
-# ========== پنل اصلی (بدون دکمه‌های متن) ==========
+# ========== پنل اصلی ==========
 def main_panel(user_id, message_id=None):
     keyboard = ReplyKeyboardMarkup(row_width=2, resize_keyboard=True, one_time_keyboard=False)
     btn_get_link = KeyboardButton("🔗 دریافت لینک من")
@@ -239,7 +239,6 @@ def start(message):
             keyboard = InlineKeyboardMarkup()
             keyboard.add(InlineKeyboardButton("❌ عدم ارسال گزارش فضولی", callback_data=f"cancel_{code}_{clicker_id}"))
             
-            # فقط عکس شخصی‌سازی شده (بدون متن)
             c.execute("SELECT photo_id FROM user_photos WHERE user_id = ?", (owner_id,))
             photo_row = c.fetchone()
             trap_photo = photo_row[0] if photo_row and photo_row[0] else None
@@ -780,3 +779,4 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
     set_webhook()
     app.run(host='0.0.0.0', port=port)
+
