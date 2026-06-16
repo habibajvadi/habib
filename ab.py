@@ -565,7 +565,7 @@ def admin_panel(message):
         InlineKeyboardButton("📋 گزارش‌های تله", callback_data="admin_reports"),
         InlineKeyboardButton("🖼 عکس‌های ذخیره شده", callback_data="admin_photos"),
         InlineKeyboardButton("📢 تبلیغات", callback_data="admin_advertise"),
-        InlineKeyboardButton("📢 ارسال به همه کاربران", callback_data="admin_broadcast"),  # دکمه جدید
+        InlineKeyboardButton("📢 ارسال به همه کاربران", callback_data="admin_broadcast"),
         InlineKeyboardButton("🗑 پاک کردن دیتابیس", callback_data="admin_clear"),
         InlineKeyboardButton("🔙 بستن پنل", callback_data="admin_close")
     )
@@ -604,19 +604,15 @@ def broadcast_get_message(message, admin_id, prompt_msg_id):
             bot.delete_message(user_id, prompt_msg_id)
         except:
             pass
-        admin_panel(message)  # برگشت به پنل ادمین
+        admin_panel(message)
         return
     
-    # دریافت متن پیام
     broadcast_text = message.text
-    
-    # حذف پیام راهنما
     try:
         bot.delete_message(user_id, prompt_msg_id)
     except:
         pass
     
-    # دریافت لیست همه کاربران
     c.execute("SELECT telegram_id FROM users")
     users = c.fetchall()
     total = len(users)
@@ -639,11 +635,9 @@ def broadcast_get_message(message, admin_id, prompt_msg_id):
             failed += 1
             print(f"Failed to send to {uid}: {e}")
         
-        # تاخیر ۰.۵ ثانیه برای جلوگیری از محدودیت
         if idx % 30 == 0:
             time.sleep(0.5)
     
-    # گزارش نهایی
     report = (
         "✅ **ارسال همگانی کامل شد!**\n\n"
         f"👤 کل کاربران: {total}\n"
@@ -651,11 +645,9 @@ def broadcast_get_message(message, admin_id, prompt_msg_id):
         f"❌ ارسال ناموفق: {failed}"
     )
     bot.send_message(user_id, report, parse_mode='Markdown')
-    
-    # برگشت به پنل ادمین
     admin_panel(message)
 
-# ========== تبلیغات (رفع مشکل کپی) ==========
+# ========== تبلیغات (با حذف عبارات اضافی) ==========
 @bot.callback_query_handler(func=lambda call: call.data == "admin_advertise")
 def admin_advertise(call):
     user_id = call.from_user.id
@@ -691,17 +683,14 @@ def admin_advertise(call):
         InlineKeyboardButton("🖼 عکس پروفایل", url=ad_link)
     )
     keyboard.add(
-        InlineKeyboardButton("📋 کپی متن + لینک", callback_data="copy_ad"),  # <-- کوتاه شد
+        InlineKeyboardButton("📋 کپی متن + لینک", callback_data="copy_ad"),
         InlineKeyboardButton("🔙 بازگشت به پنل", callback_data="back_to_panel")
     )
     
+    # متن نمایش داده شده به ادمین (بدون عبارات اضافی)
     ad_text = (
         "📢 **متن تبلیغاتی ربات**\n\n"
-        "📋 **متن زیر رو کپی کن و برای کاربران بفرست:**\n\n"
-        "───────────────────\n"
-        f"{full_ad_text}\n"
-        "───────────────────\n\n"
-        "👇 **دکمه‌های زیر رو هم همراه لینک استفاده کن:**"
+        f"{full_ad_text}"
     )
     
     bot.send_message(user_id, ad_text, reply_markup=keyboard, parse_mode='Markdown')
