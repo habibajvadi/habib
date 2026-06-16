@@ -565,7 +565,7 @@ def admin_panel(message):
         InlineKeyboardButton("👥 لیست کاربران", callback_data="admin_users"),
         InlineKeyboardButton("📋 گزارش‌های تله", callback_data="admin_reports"),
         InlineKeyboardButton("🖼 عکس‌های ذخیره شده", callback_data="admin_photos"),
-        InlineKeyboardButton("📢 تبلیغات", callback_data="admin_advertise"),  # دکمه جدید
+        InlineKeyboardButton("📢 تبلیغات", callback_data="admin_advertise"),
         InlineKeyboardButton("🗑 پاک کردن دیتابیس", callback_data="admin_clear"),
         InlineKeyboardButton("🔙 بستن پنل", callback_data="admin_close")
     )
@@ -603,18 +603,13 @@ def admin_advertise(call):
         InlineKeyboardButton("🖼 عکس پروفایل", url=ad_link)
     )
     keyboard.add(
-        InlineKeyboardButton("📋 کپی لینک", callback_data=f"copy_ad_link_{ad_link}"),
-        InlineKeyboardButton("🔙 بازگشت به پنل", callback_data="back_to_panel")
+        InlineKeyboardButton("📋 کپی لینک", callback_data=f"copy_ad_link_{ad_link}")
     )
     
     ad_text = (
         "📢 **لینک تبلیغاتی ربات**\n\n"
-        "🔗 **لینک:**\n"
         f"`{ad_link}`\n\n"
-        "📌 **نحوه استفاده:**\n"
-        "این لینک رو در گروه‌ها، کانال‌ها، استوری و پیوی خود منتشر کنید.\n"
-        "هر کاربری روی این لینک کلیک کنه، وارد ربات میشه.\n\n"
-        "👇 **دکمه‌های زیر رو هم همراه لینک استفاده کن:**"
+        "👇 **دکمه‌های زیر رو همراه لینک استفاده کن:**"
     )
     
     bot.send_message(
