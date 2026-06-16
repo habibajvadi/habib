@@ -579,8 +579,6 @@ def admin_panel(message):
     )
     
     bot.send_message(user_id, text, reply_markup=keyboard, parse_mode='Markdown')
-
-# ========== قابلیت تبلیغات (ارسال متن جذاب + هایپرلینک) ==========
 @bot.callback_query_handler(func=lambda call: call.data == "admin_advertise")
 def admin_advertise(call):
     user_id = call.from_user.id
@@ -588,10 +586,11 @@ def admin_advertise(call):
         bot.answer_callback_query(call.id, "❌ شما دسترسی ندارید!", show_alert=True)
         return
     
+    # حذف پیام قبلی (با try/except برای جلوگیری از خطا)
     try:
         bot.delete_message(call.message.chat.id, call.message.message_id)
-    except:
-        pass
+    except Exception as e:
+        print(f"Error deleting message: {e}")  # لاگ خطا در کنسول
     
     ad_link = f"https://t.me/{BOT_USERNAME}?start=ad"
     
