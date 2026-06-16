@@ -580,6 +580,7 @@ def admin_panel(message):
     
     bot.send_message(user_id, text, reply_markup=keyboard, parse_mode='Markdown')
 
+# ========== قابلیت تبلیغات (ارسال متن جذاب + هایپرلینک) ==========
 @bot.callback_query_handler(func=lambda call: call.data == "admin_advertise")
 def admin_advertise(call):
     user_id = call.from_user.id
@@ -594,6 +595,21 @@ def admin_advertise(call):
     
     ad_link = f"https://t.me/{BOT_USERNAME}?start=ad"
     
+    # متن کامل برای کپی (با هایپرلینک آبی رنگ)
+    full_ad_text = (
+        "👀 **کی داره پروفایلت رو چک میکنه؟** 😂\n\n"
+        "تا حالا شده شک کنی کسی داره پروفایلت رو می‌بینه؟\n"
+        "با این ربات دیگه نیازی به حدس زدن نیست!\n\n"
+        "🔥 **فقط کافیه روی لینک زیر کلیک کنی:**\n"
+        f"[همین حالا امتحان کن!]({ad_link})\n\n"
+        "🔹 **چیکار میکنه؟**\n"
+        "• یه لینک اختصاصی بهت میده\n"
+        "• لینک رو میذاری تو بیوگرافیت\n"
+        "• هرکی کلیک کنه، می‌فهمی کی بوده! 😉\n\n"
+        "💪 **همین حالا امتحان کن، ضرر نداره!**"
+    )
+    
+    # دکمه‌های ادمین
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
         InlineKeyboardButton("💬 پیام ناشناس", url=ad_link),
@@ -602,33 +618,33 @@ def admin_advertise(call):
         InlineKeyboardButton("🖼 عکس پروفایل", url=ad_link)
     )
     keyboard.add(
-        InlineKeyboardButton("📋 کپی لینک", callback_data=f"copy_ad_link_{ad_link}")
+        InlineKeyboardButton("📋 کپی متن + لینک", callback_data=f"copy_ad_full_{full_ad_text}"),
+        InlineKeyboardButton("🔙 بازگشت به پنل", callback_data="back_to_panel")
     )
     
+    # پیامی که ادمین می‌بینه
     ad_text = (
-        "📢 **لینک تبلیغاتی ربات**\n\n"
-        f"`{ad_link}`\n\n"
-        "👇 **دکمه‌های زیر رو همراه لینک استفاده کن:**"
+        "📢 **متن تبلیغاتی ربات**\n\n"
+        "📋 **متن زیر رو کپی کن و برای کاربران بفرست:**\n\n"
+        "───────────────────\n"
+        f"{full_ad_text}\n"
+        "───────────────────\n\n"
+        "👇 **دکمه‌های زیر رو هم همراه لینک استفاده کن:**"
     )
     
-    bot.send_message(
-        user_id,
-        ad_text,
-        reply_markup=keyboard,
-        parse_mode='Markdown'
-    )
-    
-    bot.answer_callback_query(call.id, "✅ لینک تبلیغاتی ساخته شد!")
+    bot.send_message(user_id, ad_text, reply_markup=keyboard, parse_mode='Markdown')
+    bot.answer_callback_query(call.id, "✅ متن تبلیغاتی ساخته شد!")
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("copy_ad_link_"))
-def copy_ad_link(call):
-    ad_link = call.data.replace("copy_ad_link_", "")
+@bot.callback_query_handler(func=lambda call: call.data.startswith("copy_ad_full_"))
+def copy_ad_full(call):
+    full_text = call.data.replace("copy_ad_full_", "")
     bot.answer_callback_query(
         call.id, 
-        f"✅ لینک کپی شد!\n{ad_link}", 
+        f"✅ متن و لینک کپی شد!\n\n{full_text[:200]}...", 
         show_alert=True
     )
 
+# ---------- بقیه بخش‌های پنل مدیریت (بدون تغییر) ----------
 @bot.callback_query_handler(func=lambda call: call.data == "admin_stats")
 def admin_stats(call):
     user_id = call.from_user.id
