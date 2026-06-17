@@ -647,7 +647,7 @@ def broadcast_get_message(message, admin_id, prompt_msg_id):
     bot.send_message(user_id, report, parse_mode='Markdown')
     admin_panel(message)
 
-# ========== تبلیغات (با حذف عبارات اضافی) ==========
+# ========== تبلیغات (دریافت لینک از ادمین و ساخت پیام تله) ==========
 @bot.callback_query_handler(func=lambda call: call.data == "admin_advertise")
 def admin_advertise(call):
     user_id = call.from_user.id
@@ -655,76 +655,94 @@ def admin_advertise(call):
         bot.answer_callback_query(call.id, "❌ شما دسترسی ندارید!", show_alert=True)
         return
     
+    # حذف پیام قبلی پنل
     try:
         bot.delete_message(call.message.chat.id, call.message.message_id)
-    except Exception as e:
-        print(f"Error deleting message: {e}")
+    except:
+        pass
     
-    ad_link = f"https://t.me/{BOT_USERNAME}?start=ad"
+    # دکمه انصراف
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton("❌ انصراف", callback_data="cancel_ad"))
     
-    full_ad_text = (
-        "👀 **کی داره پروفایلت رو چک میکنه؟** 😂\n\n"
-        "تا حالا شده شک کنی کسی داره پروفایلت رو می‌بینه؟\n"
-        "با این ربات دیگه نیازی به حدس زدن نیست!\n\n"
-        "🔥 **فقط کافیه روی لینک زیر کلیک کنی:**\n"
-        f"[همین حالا امتحان کن!]({ad_link})\n\n"
-        "🔹 **چیکار میکنه؟**\n"
-        "• یه لینک اختصاصی بهت میده\n"
-        "• لینک رو میذاری تو بیوگرافیت\n"
-        "• هرکی کلیک کنه، می‌فهمی کی بوده! 😉\n\n"
-        "💪 **همین حالا امتحان کن، ضرر نداره!**"
+    msg = bot.send_message(
+        user_id,
+        "📢 **ساخت پیام تبلیغاتی**\n\n"
+        "لطفاً لینک کانال یا گروه مورد نظر را ارسال کنید.\n\n"
+        "مثال: `https://t.me/your_channel`\n\n"
+        "⚠️ این لینک در دکمه‌های پیام قرار داده خواهد شد.",
+        reply_markup=keyboard,
+        parse_mode='Markdown'
+    )
+    
+    # منتظر دریافت لینک از ادمین
+    bot.register_next_step_handler_by_chat_id(user_id, receive_ad_link, user_id, msg.message_id)
+    bot.answer_callback_query(call.id, "✅ لطفاً لینک را ارسال کنید.")
+
+def receive_ad_link(message, admin_id, prompt_msg_id):
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        return
+    
+    # حذف پیام راهنما
+    try:
+        bot.delete_message(admin_id, prompt_msg_id)
+    except:
+        pass
+    
+    # دریافت لینک
+    link = message.text.strip()
+    
+    # اعتبارسنجی ساده
+    if not link.startswith("http"):
+        bot.send_message(admin_id, "❌ لینک نامعتبر! لطفاً با `https://` شروع کنید.")
+        admin_panel(message)  # برگشت به پنل
+        return
+    
+    # ساخت پیام تله با لینک دریافتی
+    trap_message = (
+        "🎯 **یک فضول در تله افتاد!**\n\n"
+        "👤 نام: سارا\n"
+        "⏰ زمان: 12:48"
     )
     
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
-        InlineKeyboardButton("💬 پیام ناشناس", url=ad_link),
-        InlineKeyboardButton("📝 بیوگرافی", url=ad_link),
-        InlineKeyboardButton("📨 پیوی", url=ad_link),
-        InlineKeyboardButton("🖼 عکس پروفایل", url=ad_link)
-    )
-    keyboard.add(
-        InlineKeyboardButton("📋 کپی متن + لینک", callback_data="copy_ad"),
-        InlineKeyboardButton("🔙 بازگشت به پنل", callback_data="back_to_panel")
+        InlineKeyboardButton("💬 پیام ناشناس", url=link),
+        InlineKeyboardButton("📝 بیوگرافی", url=link),
+        InlineKeyboardButton("📨 پیوی", url=link),
+        InlineKeyboardButton("🖼 پروفایل", url=link)
     )
     
-    # متن نمایش داده شده به ادمین (بدون عبارات اضافی)
-    ad_text = (
-        "📢 **متن تبلیغاتی ربات**\n\n"
-        f"{full_ad_text}"
+    # ارسال پیام نهایی به ادمین (بدون هیچ دکمه اضافی)
+    bot.send_message(
+        admin_id,
+        trap_message,
+        reply_markup=keyboard,
+        parse_mode='Markdown'
     )
     
-    bot.send_message(user_id, ad_text, reply_markup=keyboard, parse_mode='Markdown')
-    bot.answer_callback_query(call.id, "✅ متن تبلیغاتی ساخته شد!")
+    # اطلاع به ادمین
+    bot.send_message(admin_id, "✅ پیام تبلیغاتی ساخته شد! می‌توانید آن را برای کاربران فوروارد کنید.")
+    
+    # برگشت به پنل ادمین
+    admin_panel(message)
 
-@bot.callback_query_handler(func=lambda call: call.data == "copy_ad")
-def copy_ad_callback(call):
+@bot.callback_query_handler(func=lambda call: call.data == "cancel_ad")
+def cancel_ad(call):
     user_id = call.from_user.id
     if user_id not in ADMIN_IDS:
         bot.answer_callback_query(call.id, "❌ شما دسترسی ندارید!", show_alert=True)
         return
     
-    ad_link = f"https://t.me/{BOT_USERNAME}?start=ad"
-    full_text = (
-        "👀 **کی داره پروفایلت رو چک میکنه؟** 😂\n\n"
-        "تا حالا شده شک کنی کسی داره پروفایلت رو می‌بینه؟\n"
-        "با این ربات دیگه نیازی به حدس زدن نیست!\n\n"
-        "🔥 **فقط کافیه روی لینک زیر کلیک کنی:**\n"
-        f"[همین حالا امتحان کن!]({ad_link})\n\n"
-        "🔹 **چیکار میکنه؟**\n"
-        "• یه لینک اختصاصی بهت میده\n"
-        "• لینک رو میذاری تو بیوگرافیت\n"
-        "• هرکی کلیک کنه، می‌فهمی کی بوده! 😉\n\n"
-        "💪 **همین حالا امتحان کن، ضرر نداره!**"
-    )
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except:
+        pass
     
-    bot.send_message(
-        user_id,
-        f"📋 **متن کامل تبلیغاتی (قابل کپی):**\n\n"
-        f"`{full_text}`\n\n"
-        "📌 این متن را انتخاب کنید و کپی کنید.",
-        parse_mode='Markdown'
-    )
-    bot.answer_callback_query(call.id, "✅ متن کامل برای شما ارسال شد!")
+    bot.send_message(user_id, "❌ عملیات ساخت تبلیغ لغو شد.")
+    admin_panel(call.message)  # برگشت به پنل
+    bot.answer_callback_query(call.id, "✅ لغو شد")
 
 # ---------- بقیه بخش‌های پنل مدیریت (بدون تغییر) ----------
 @bot.callback_query_handler(func=lambda call: call.data == "admin_stats")
