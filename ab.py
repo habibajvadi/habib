@@ -61,6 +61,7 @@ c.execute("""CREATE TABLE IF NOT EXISTS trapped_history (
 conn.commit()
 
 anonymous_temp = {}
+ad_temp = {}  # دیکشنری موقت برای ذخیره اسم و لینک تبلیغات
 
 # ========== مدیران ربات ==========
 ADMIN_IDS = [8521463103, 5333419558]
@@ -647,7 +648,7 @@ def broadcast_get_message(message, admin_id, prompt_msg_id):
     bot.send_message(user_id, report, parse_mode='Markdown')
     admin_panel(message)
 
-# ========== تبلیغات (دریافت لینک از ادمین و ساخت پیام تله) ==========
+# ========== تبلیغات (دریافت اسم و لینک از ادمین و ساخت پیام تله) ==========
 @bot.callback_query_handler(func=lambda call: call.data == "admin_advertise")
 def admin_advertise(call):
     user_id = call.from_user.id
@@ -655,81 +656,148 @@ def admin_advertise(call):
         bot.answer_callback_query(call.id, "❌ شما دسترسی ندارید!", show_alert=True)
         return
     
-    # حذف پیام قبلی پنل
     try:
         bot.delete_message(call.message.chat.id, call.message.message_id)
     except:
         pass
     
+    # ذخیره وضعیت در دیکشنری موقت
+    ad_temp[user_id] = {}
+    
     # دکمه انصراف
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("❌ انصراف", callback_data="cancel_ad"))
     
-    msg = bot.send_message(
+    bot.send_message(
         user_id,
-        "📢 **ساخت پیام تبلیغاتی**\n\n"
-        "لطفاً لینک کانال یا گروه مورد نظر را ارسال کنید.\n\n"
-        "مثال: `https://t.me/your_channel`\n\n"
-        "⚠️ این لینک در دکمه‌های پیام قرار داده خواهد شد.",
+        "📝 **مرحله ۱ از ۲**\n\n"
+        "لطفاً **اسم** مورد نظر برای پیام تله را وارد کنید:\n"
+        "(مثلاً: سارا، علی، یا هر اسم دلخواه)",
         reply_markup=keyboard,
         parse_mode='Markdown'
     )
-    
-    # منتظر دریافت لینک از ادمین
-    bot.register_next_step_handler_by_chat_id(user_id, receive_ad_link, user_id, msg.message_id)
-    bot.answer_callback_query(call.id, "✅ لطفاً لینک را ارسال کنید.")
+    bot.register_next_step_handler_by_chat_id(user_id, ad_get_name, user_id)
+    bot.answer_callback_query(call.id, "✅")
 
-def receive_ad_link(message, admin_id, prompt_msg_id):
+def ad_get_name(message, admin_id):
     user_id = message.from_user.id
     if user_id not in ADMIN_IDS:
         return
     
-    # حذف پیام راهنما
-    try:
-        bot.delete_message(admin_id, prompt_msg_id)
-    except:
-        pass
-    
-    # دریافت لینک
-    link = message.text.strip()
-    
-    # اعتبارسنجی ساده
-    if not link.startswith("http"):
-        bot.send_message(admin_id, "❌ لینک نامعتبر! لطفاً با `https://` شروع کنید.")
-        admin_panel(message)  # برگشت به پنل
+    # بررسی انصراف
+    if message.text == "/cancel":
+        cancel_ad_process(user_id)
         return
     
-    # ساخت پیام تله با لینک دریافتی
+    name = message.text.strip()
+    if not name:
+        bot.send_message(user_id, "❌ اسم نمی‌تواند خالی باشد. دوباره تلاش کنید.")
+        ad_restart(user_id)
+        return
+    
+    # ذخیره اسم
+    ad_temp[user_id]["name"] = name
+    
+    # دکمه انصراف
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton("❌ انصراف", callback_data="cancel_ad"))
+    
+    bot.send_message(
+        user_id,
+        "📝 **مرحله ۲ از ۲**\n\n"
+        "لطفاً **لینک** مورد نظر را وارد کنید:\n"
+        "(این لینک در دکمه‌های پیام ناشناس، پیوی و پروفایل قرار می‌گیرد)\n\n"
+        "مثال: `https://t.me/staystrongs_bot?start=ad`",
+        reply_markup=keyboard,
+        parse_mode='Markdown'
+    )
+    bot.register_next_step_handler_by_chat_id(user_id, ad_get_link, user_id)
+
+def ad_get_link(message, admin_id):
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        return
+    
+    # بررسی انصراف
+    if message.text == "/cancel":
+        cancel_ad_process(user_id)
+        return
+    
+    link = message.text.strip()
+    if not link.startswith(("http://", "https://")):
+        bot.send_message(
+            user_id,
+            "❌ لینک باید با `http://` یا `https://` شروع شود. دوباره تلاش کنید.",
+            parse_mode='Markdown'
+        )
+        # دوباره مرحله ۲
+        keyboard = InlineKeyboardMarkup()
+        keyboard.add(InlineKeyboardButton("❌ انصراف", callback_data="cancel_ad"))
+        msg = bot.send_message(
+            user_id,
+            "لطفاً لینک خود را وارد کنید:",
+            reply_markup=keyboard
+        )
+        bot.register_next_step_handler_by_chat_id(user_id, ad_get_link, user_id)
+        return
+    
+    # ذخیره لینک
+    ad_temp[user_id]["link"] = link
+    
+    # دریافت اسم
+    name = ad_temp[user_id].get("name", "کاربر جدید")
+    
+    # ساخت پیام تله با اسم و لینک واردشده
     trap_message = (
-        "🎯 **یک فضول در تله افتاد!**\n\n"
-        "👤 نام: سارا\n"
-        "⏰ زمان: 12:48"
+        f"🎯 **یک فضول در تله افتاد!**\n\n"
+        f"👤 نام: {name}\n"
+        f"⏰ زمان: {datetime.now().strftime('%H:%M')}"
     )
     
+    # دکمه‌ها با لینک واردشده توسط ادمین
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
         InlineKeyboardButton("💬 پیام ناشناس", url=link),
-        InlineKeyboardButton("📝 بیوگرافی", url=link),
+          InlineKeyboardButton("📝 بیوگرافی", url=link),
         InlineKeyboardButton("📨 پیوی", url=link),
         InlineKeyboardButton("🖼 پروفایل", url=link)
     )
     
-    # ارسال پیام نهایی به ادمین (بدون هیچ دکمه اضافی)
     bot.send_message(
-        admin_id,
+        user_id,
         trap_message,
         reply_markup=keyboard,
         parse_mode='Markdown'
     )
     
-    # اطلاع به ادمین
-    bot.send_message(admin_id, "✅ پیام تبلیغاتی ساخته شد! می‌توانید آن را برای کاربران فوروارد کنید.")
-    
-    # برگشت به پنل ادمین
-    admin_panel(message)
+    # پاک کردن دیکشنری موقت
+    if user_id in ad_temp:
+        del ad_temp[user_id]
+
+def ad_restart(user_id):
+    """شروع مجدد فرآیند از مرحله ۱"""
+    ad_temp[user_id] = {}
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton("❌ انصراف", callback_data="cancel_ad"))
+    bot.send_message(
+        user_id,
+        "📝 **مرحله ۱ از ۲**\n\n"
+        "لطفاً **اسم** مورد نظر برای پیام تله را وارد کنید:",
+        reply_markup=keyboard,
+        parse_mode='Markdown'
+    )
+    bot.register_next_step_handler_by_chat_id(user_id, ad_get_name, user_id)
+
+def cancel_ad_process(user_id):
+    """لغو فرآیند و برگشت به پنل"""
+    if user_id in ad_temp:
+        del ad_temp[user_id]
+    bot.send_message(user_id, "❌ عملیات ساخت تبلیغ لغو شد.")
+    # برگشت به پنل ادمین (با ارسال یک پیام ساختگی)
+    admin_panel(bot.message)
 
 @bot.callback_query_handler(func=lambda call: call.data == "cancel_ad")
-def cancel_ad(call):
+def cancel_ad_callback(call):
     user_id = call.from_user.id
     if user_id not in ADMIN_IDS:
         bot.answer_callback_query(call.id, "❌ شما دسترسی ندارید!", show_alert=True)
@@ -740,8 +808,7 @@ def cancel_ad(call):
     except:
         pass
     
-    bot.send_message(user_id, "❌ عملیات ساخت تبلیغ لغو شد.")
-    admin_panel(call.message)  # برگشت به پنل
+    cancel_ad_process(user_id)
     bot.answer_callback_query(call.id, "✅ لغو شد")
 
 # ---------- بقیه بخش‌های پنل مدیریت (بدون تغییر) ----------
