@@ -17,48 +17,115 @@ BASE_URL = "https://habib-q5vo.onrender.com"
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
-# ---------- دیتابیس ----------
-conn = sqlite3.connect("/tmp/tracker.db", check_same_thread=False)
-c = conn.cursor()
+# ---------- دیتابیس (سازگار با PostgreSQL و SQLite) ----------
+DATABASE_URL = os.environ.get('DATABASE_URL')
 
-c.execute("DROP TABLE IF EXISTS users")
-c.execute("CREATE TABLE users (telegram_id INTEGER PRIMARY KEY, link_code TEXT UNIQUE, user_name TEXT)")
+if DATABASE_URL:
+    # استفاده از PostgreSQL در Render
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    
+    conn = psycopg2.connect(DATABASE_URL, sslmode='require')
+    c = conn.cursor()
+    
+    # ایجاد جدول‌ها (بدون DROP TABLE تا داده‌ها از بین نروند)
+    c.execute("""CREATE TABLE IF NOT EXISTS users (
+        telegram_id BIGINT PRIMARY KEY,
+        link_code TEXT UNIQUE,
+        user_name TEXT
+    )""")
+    
+    c.execute("""CREATE TABLE IF NOT EXISTS pending_reports (
+        id SERIAL PRIMARY KEY,
+        link_code TEXT,
+        owner_id BIGINT,
+        clicker_id BIGINT,
+        message_id BIGINT,
+        expires_at TIMESTAMP,
+        cancelled BOOLEAN DEFAULT FALSE
+    )""")
+    
+    c.execute("""CREATE TABLE IF NOT EXISTS cancel_payments (
+        id SERIAL PRIMARY KEY,
+        report_id INTEGER,
+        user_id BIGINT,
+        authority TEXT UNIQUE,
+        amount INTEGER,
+        status TEXT DEFAULT 'pending',
+        created_at TIMESTAMP
+    )""")
+    
+    c.execute("""CREATE TABLE IF NOT EXISTS user_photos (
+        user_id BIGINT PRIMARY KEY,
+        photo_id TEXT
+    )""")
+    
+    c.execute("""CREATE TABLE IF NOT EXISTS trapped_history (
+        id SERIAL PRIMARY KEY,
+        owner_id BIGINT,
+        clicker_id BIGINT,
+        clicker_name TEXT,
+        clicker_username TEXT,
+        trapped_at TEXT
+    )""")
+    
+    conn.commit()
+    print("✅ Connected to PostgreSQL successfully!")
+    
+    # تعریف تابع lastrowid برای PostgreSQL
+    def get_lastrowid():
+        return c.lastrowid
 
-c.execute("""CREATE TABLE IF NOT EXISTS pending_reports (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    link_code TEXT,
-    owner_id INTEGER,
-    clicker_id INTEGER,
-    message_id INTEGER,
-    expires_at DATETIME,
-    cancelled BOOLEAN DEFAULT FALSE
-)""")
-
-c.execute("""CREATE TABLE IF NOT EXISTS cancel_payments (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    report_id INTEGER,
-    user_id INTEGER,
-    authority TEXT UNIQUE,
-    amount INTEGER,
-    status TEXT DEFAULT 'pending',
-    created_at DATETIME
-)""")
-
-c.execute("""CREATE TABLE IF NOT EXISTS user_photos (
-    user_id INTEGER PRIMARY KEY,
-    photo_id TEXT
-)""")
-
-c.execute("""CREATE TABLE IF NOT EXISTS trapped_history (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    owner_id INTEGER,
-    clicker_id INTEGER,
-    clicker_name TEXT,
-    clicker_username TEXT,
-    trapped_at TEXT
-)""")
-
-conn.commit()
+else:
+    # استفاده از SQLite برای تست محلی
+    conn = sqlite3.connect("tracker.db", check_same_thread=False)
+    c = conn.cursor()
+    
+    c.execute("""CREATE TABLE IF NOT EXISTS users (
+        telegram_id INTEGER PRIMARY KEY,
+        link_code TEXT UNIQUE,
+        user_name TEXT
+    )""")
+    
+    c.execute("""CREATE TABLE IF NOT EXISTS pending_reports (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        link_code TEXT,
+        owner_id INTEGER,
+        clicker_id INTEGER,
+        message_id INTEGER,
+        expires_at DATETIME,
+        cancelled BOOLEAN DEFAULT FALSE
+    )""")
+    
+    c.execute("""CREATE TABLE IF NOT EXISTS cancel_payments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        report_id INTEGER,
+        user_id INTEGER,
+        authority TEXT UNIQUE,
+        amount INTEGER,
+        status TEXT DEFAULT 'pending',
+        created_at DATETIME
+    )""")
+    
+    c.execute("""CREATE TABLE IF NOT EXISTS user_photos (
+        user_id INTEGER PRIMARY KEY,
+        photo_id TEXT
+    )""")
+    
+    c.execute("""CREATE TABLE IF NOT EXISTS trapped_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        owner_id INTEGER,
+        clicker_id INTEGER,
+        clicker_name TEXT,
+        clicker_username TEXT,
+        trapped_at TEXT
+    )""")
+    
+    conn.commit()
+    print("✅ Connected to SQLite successfully!")
+    
+    def get_lastrowid():
+        return c.lastrowid
 
 anonymous_temp = {}
 reply_temp = {}  # دیکشنری موقت برای پاسخ ناشناس
@@ -73,7 +140,7 @@ def get_total_users():
     return c.fetchone()[0]
 
 def get_total_reports():
-    c.execute("SELECT COUNT(*) FROM pending_reports WHERE cancelled = 0")
+    c.execute("SELECT COUNT(*) FROM pending_reports WHERE cancelled = FALSE")
     return c.fetchone()[0]
 
 def get_total_trapped():
@@ -112,7 +179,14 @@ def main_panel(user_id, message_id=None):
 # ---------- توابع اصلی ----------
 def generate_link(telegram_id):
     code = str(telegram_id)
-    c.execute("INSERT OR REPLACE INTO users (telegram_id, link_code) VALUES (?, ?)", (telegram_id, code))
+    if DATABASE_URL:
+        # PostgreSQL
+        c.execute("""INSERT INTO users (telegram_id, link_code) 
+                     VALUES (%s, %s) 
+                     ON CONFLICT (telegram_id) DO UPDATE SET link_code = EXCLUDED.link_code""", (telegram_id, code))
+    else:
+        # SQLite
+        c.execute("INSERT OR REPLACE INTO users (telegram_id, link_code) VALUES (?, ?)", (telegram_id, code))
     conn.commit()
     return f"https://t.me/{BOT_USERNAME}?start=track_{code}"
 
@@ -123,7 +197,7 @@ def get_owner_id_by_code(code):
         return None
 
 def get_owner_name(owner_id):
-    c.execute("SELECT user_name FROM users WHERE telegram_id = ?", (owner_id,))
+    c.execute("SELECT user_name FROM users WHERE telegram_id = %s" if DATABASE_URL else "SELECT user_name FROM users WHERE telegram_id = ?", (owner_id,))
     row = c.fetchone()
     if row and row[0]:
         return row[0]
@@ -131,7 +205,10 @@ def get_owner_name(owner_id):
         chat = bot.get_chat(owner_id)
         name = f"{chat.first_name or ''} {chat.last_name or ''}".strip()
         if name:
-            c.execute("UPDATE users SET user_name = ? WHERE telegram_id = ?", (name, owner_id))
+            if DATABASE_URL:
+                c.execute("UPDATE users SET user_name = %s WHERE telegram_id = %s", (name, owner_id))
+            else:
+                c.execute("UPDATE users SET user_name = ? WHERE telegram_id = ?", (name, owner_id))
             conn.commit()
         return name if name else "کاربر"
     except:
@@ -147,25 +224,38 @@ def get_clicker_name(clicker_id):
 def save_trapped_history(owner_id, clicker_id, clicker_name, clicker_username):
     try:
         trapped_time = datetime.now().isoformat()
-        c.execute("INSERT INTO trapped_history (owner_id, clicker_id, clicker_name, clicker_username, trapped_at) VALUES (?, ?, ?, ?, ?)",
-                  (owner_id, clicker_id, clicker_name, clicker_username, trapped_time))
+        if DATABASE_URL:
+            c.execute("INSERT INTO trapped_history (owner_id, clicker_id, clicker_name, clicker_username, trapped_at) VALUES (%s, %s, %s, %s, %s)",
+                      (owner_id, clicker_id, clicker_name, clicker_username, trapped_time))
+        else:
+            c.execute("INSERT INTO trapped_history (owner_id, clicker_id, clicker_name, clicker_username, trapped_at) VALUES (?, ?, ?, ?, ?)",
+                      (owner_id, clicker_id, clicker_name, clicker_username, trapped_time))
         conn.commit()
     except Exception as e:
         print(f"Error saving trapped history: {e}")
 
 def delete_message_later(chat_id, message_id, delay, clicker_id, owner_name, report_id):
     time.sleep(delay)
-    c.execute("SELECT status FROM cancel_payments WHERE report_id = ? AND status = 'paid'", (report_id,))
+    if DATABASE_URL:
+        c.execute("SELECT status FROM cancel_payments WHERE report_id = %s AND status = 'paid'", (report_id,))
+    else:
+        c.execute("SELECT status FROM cancel_payments WHERE report_id = ? AND status = 'paid'", (report_id,))
     if c.fetchone():
         return
     try:
         bot.delete_message(chat_id, message_id)
     except:
         pass
-    c.execute("SELECT cancelled FROM pending_reports WHERE id = ?", (report_id,))
+    if DATABASE_URL:
+        c.execute("SELECT cancelled FROM pending_reports WHERE id = %s", (report_id,))
+    else:
+        c.execute("SELECT cancelled FROM pending_reports WHERE id = ?", (report_id,))
     result = c.fetchone()
-    if result and result[0] == 0:
-        c.execute("SELECT owner_id, clicker_id FROM pending_reports WHERE id = ?", (report_id,))
+    if result and result[0] == False:
+        if DATABASE_URL:
+            c.execute("SELECT owner_id, clicker_id FROM pending_reports WHERE id = %s", (report_id,))
+        else:
+            c.execute("SELECT owner_id, clicker_id FROM pending_reports WHERE id = ?", (report_id,))
         row = c.fetchone()
         if row:
             owner_id, clicker_id = row
@@ -204,8 +294,14 @@ def start(message):
     name = message.from_user.first_name
     if message.from_user.last_name:
         name += " " + message.from_user.last_name
-    c.execute("INSERT OR IGNORE INTO users (telegram_id, link_code, user_name) VALUES (?, ?, ?)",
-              (user_id, str(user_id), name))
+    
+    if DATABASE_URL:
+        c.execute("""INSERT INTO users (telegram_id, link_code, user_name) 
+                     VALUES (%s, %s, %s) 
+                     ON CONFLICT (telegram_id) DO NOTHING""", (user_id, str(user_id), name))
+    else:
+        c.execute("INSERT OR IGNORE INTO users (telegram_id, link_code, user_name) VALUES (?, ?, ?)",
+                  (user_id, str(user_id), name))
     conn.commit()
     
     # ========== لینک تبلیغاتی (ad) ==========
@@ -241,7 +337,10 @@ def start(message):
             keyboard = InlineKeyboardMarkup()
             keyboard.add(InlineKeyboardButton("❌ عدم ارسال گزارش فضولی", callback_data=f"cancel_{code}_{clicker_id}"))
             
-            c.execute("SELECT photo_id FROM user_photos WHERE user_id = ?", (owner_id,))
+            if DATABASE_URL:
+                c.execute("SELECT photo_id FROM user_photos WHERE user_id = %s", (owner_id,))
+            else:
+                c.execute("SELECT photo_id FROM user_photos WHERE user_id = ?", (owner_id,))
             photo_row = c.fetchone()
             trap_photo = photo_row[0] if photo_row and photo_row[0] else None
             
@@ -252,10 +351,17 @@ def start(message):
             else:
                 msg = bot.send_message(clicker_id, trap_text, reply_markup=keyboard, parse_mode='Markdown')
             
-            c.execute("INSERT INTO pending_reports (link_code, owner_id, clicker_id, message_id, expires_at) VALUES (?, ?, ?, ?, ?)",
-                      (code, owner_id, clicker_id, msg.message_id, datetime.now() + timedelta(seconds=75)))
+            expires_at = datetime.now() + timedelta(seconds=75)
+            if DATABASE_URL:
+                c.execute("INSERT INTO pending_reports (link_code, owner_id, clicker_id, message_id, expires_at) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+                          (code, owner_id, clicker_id, msg.message_id, expires_at))
+                report_id = c.fetchone()[0]
+            else:
+                c.execute("INSERT INTO pending_reports (link_code, owner_id, clicker_id, message_id, expires_at) VALUES (?, ?, ?, ?, ?)",
+                          (code, owner_id, clicker_id, msg.message_id, expires_at))
+                report_id = c.lastrowid
             conn.commit()
-            report_id = c.lastrowid
+            
             threading.Thread(target=delete_message_later, args=(clicker_id, msg.message_id, 75, clicker_id, owner_name, report_id)).start()
         elif owner_id == clicker_id:
             bot.send_message(clicker_id, "⚠️ این لینک مال خودته!")
@@ -300,7 +406,10 @@ def save_photo(message):
     user_id = message.from_user.id
     if message.photo:
         file_id = message.photo[-1].file_id
-        c.execute("INSERT OR REPLACE INTO user_photos (user_id, photo_id) VALUES (?, ?)", (user_id, file_id))
+        if DATABASE_URL:
+            c.execute("INSERT INTO user_photos (user_id, photo_id) VALUES (%s, %s) ON CONFLICT (user_id) DO UPDATE SET photo_id = EXCLUDED.photo_id", (user_id, file_id))
+        else:
+            c.execute("INSERT OR REPLACE INTO user_photos (user_id, photo_id) VALUES (?, ?)", (user_id, file_id))
         conn.commit()
         bot.send_message(user_id, "✅ عکس مچ‌گیری شما با موفقیت ذخیره شد!\nاز این پس هنگام کلیک روی لینک شما، این عکس نمایش داده می‌شود.")
     else:
@@ -311,7 +420,10 @@ def save_photo(message):
 @bot.message_handler(func=lambda message: message.text == "🗑 حذف عکس مچ گیری")
 def delete_trap_photo(message):
     user_id = message.from_user.id
-    c.execute("DELETE FROM user_photos WHERE user_id = ?", (user_id,))
+    if DATABASE_URL:
+        c.execute("DELETE FROM user_photos WHERE user_id = %s", (user_id,))
+    else:
+        c.execute("DELETE FROM user_photos WHERE user_id = ?", (user_id,))
     conn.commit()
     bot.send_message(user_id, "🗑 عکس مچ‌گیری شما با موفقیت حذف شد.\nاز این پس هنگام کلیک روی لینک شما، عکسی نمایش داده نمی‌شود.")
     main_panel(user_id)
@@ -321,7 +433,10 @@ def delete_trap_photo(message):
 def show_trapped_list(message):
     user_id = message.from_user.id
     try:
-        c.execute("SELECT clicker_name, clicker_username, trapped_at FROM trapped_history WHERE owner_id = ? ORDER BY trapped_at DESC LIMIT 20", (user_id,))
+        if DATABASE_URL:
+            c.execute("SELECT clicker_name, clicker_username, trapped_at FROM trapped_history WHERE owner_id = %s ORDER BY trapped_at DESC LIMIT 20", (user_id,))
+        else:
+            c.execute("SELECT clicker_name, clicker_username, trapped_at FROM trapped_history WHERE owner_id = ? ORDER BY trapped_at DESC LIMIT 20", (user_id,))
         rows = c.fetchall()
         if not rows:
             bot.send_message(user_id, "📭 هیچ کاربری تا کنون در تله شما نیفتاده است.")
@@ -513,7 +628,10 @@ def cancel_report_payment_page(call):
     if call.from_user.id != clicker_id:
         bot.answer_callback_query(call.id, "این دکمه مال تو نیست!", show_alert=True)
         return
-    c.execute("SELECT id FROM pending_reports WHERE link_code = ? AND clicker_id = ? AND cancelled = FALSE ORDER BY id DESC LIMIT 1", (code, clicker_id))
+    if DATABASE_URL:
+        c.execute("SELECT id FROM pending_reports WHERE link_code = %s AND clicker_id = %s AND cancelled = FALSE ORDER BY id DESC LIMIT 1", (code, clicker_id))
+    else:
+        c.execute("SELECT id FROM pending_reports WHERE link_code = ? AND clicker_id = ? AND cancelled = FALSE ORDER BY id DESC LIMIT 1", (code, clicker_id))
     row = c.fetchone()
     if not row:
         bot.answer_callback_query(call.id, "گزارشی یافت نشد!", show_alert=True)
@@ -532,7 +650,10 @@ def cancel_report_payment_page(call):
 def fake_payment(call):
     _, report_id = call.data.split("_")
     report_id = int(report_id)
-    c.execute("UPDATE pending_reports SET cancelled = TRUE WHERE id = ?", (report_id,))
+    if DATABASE_URL:
+        c.execute("UPDATE pending_reports SET cancelled = TRUE WHERE id = %s", (report_id,))
+    else:
+        c.execute("UPDATE pending_reports SET cancelled = TRUE WHERE id = ?", (report_id,))
     conn.commit()
     bot.answer_callback_query(call.id, "✅ پرداخت با موفقیت انجام شد!")
     try:
@@ -693,7 +814,10 @@ def broadcast_get_message(message, admin_id, prompt_msg_id):
     except:
         pass
     
-    c.execute("SELECT telegram_id FROM users")
+    if DATABASE_URL:
+        c.execute("SELECT telegram_id FROM users")
+    else:
+        c.execute("SELECT telegram_id FROM users")
     users = c.fetchall()
     total = len(users)
     
@@ -913,7 +1037,10 @@ def admin_users(call):
     if user_id not in ADMIN_IDS:
         bot.answer_callback_query(call.id, "❌ شما دسترسی ندارید!", show_alert=True)
         return
-    c.execute("SELECT telegram_id, user_name, link_code FROM users ORDER BY telegram_id DESC LIMIT 30")
+    if DATABASE_URL:
+        c.execute("SELECT telegram_id, user_name, link_code FROM users ORDER BY telegram_id DESC LIMIT 30")
+    else:
+        c.execute("SELECT telegram_id, user_name, link_code FROM users ORDER BY telegram_id DESC LIMIT 30")
     users = c.fetchall()
     if not users:
         text = "📭 هیچ کاربری در دیتابیس یافت نشد."
@@ -931,7 +1058,10 @@ def admin_reports(call):
     if user_id not in ADMIN_IDS:
         bot.answer_callback_query(call.id, "❌ شما دسترسی ندارید!", show_alert=True)
         return
-    c.execute("SELECT id, owner_id, clicker_id, expires_at, cancelled FROM pending_reports ORDER BY id DESC LIMIT 20")
+    if DATABASE_URL:
+        c.execute("SELECT id, owner_id, clicker_id, expires_at, cancelled FROM pending_reports ORDER BY id DESC LIMIT 20")
+    else:
+        c.execute("SELECT id, owner_id, clicker_id, expires_at, cancelled FROM pending_reports ORDER BY id DESC LIMIT 20")
     reports = c.fetchall()
     if not reports:
         text = "📭 هیچ گزارشی یافت نشد."
@@ -951,7 +1081,10 @@ def admin_photos(call):
     if user_id not in ADMIN_IDS:
         bot.answer_callback_query(call.id, "❌ شما دسترسی ندارید!", show_alert=True)
         return
-    c.execute("SELECT user_id, photo_id FROM user_photos LIMIT 20")
+    if DATABASE_URL:
+        c.execute("SELECT user_id, photo_id FROM user_photos LIMIT 20")
+    else:
+        c.execute("SELECT user_id, photo_id FROM user_photos LIMIT 20")
     photos = c.fetchall()
     if not photos:
         text = "📭 هیچ عکسی ذخیره نشده است."
@@ -992,10 +1125,16 @@ def admin_confirm_clear(call):
     if user_id not in ADMIN_IDS:
         bot.answer_callback_query(call.id, "❌ شما دسترسی ندارید!", show_alert=True)
         return
-    c.execute("DELETE FROM users")
-    c.execute("DELETE FROM pending_reports")
-    c.execute("DELETE FROM user_photos")
-    c.execute("DELETE FROM trapped_history")
+    if DATABASE_URL:
+        c.execute("DELETE FROM users")
+        c.execute("DELETE FROM pending_reports")
+        c.execute("DELETE FROM user_photos")
+        c.execute("DELETE FROM trapped_history")
+    else:
+        c.execute("DELETE FROM users")
+        c.execute("DELETE FROM pending_reports")
+        c.execute("DELETE FROM user_photos")
+        c.execute("DELETE FROM trapped_history")
     conn.commit()
     bot.edit_message_text(
         "✅ **دیتابیس با موفقیت پاک شد!**\n\n"
