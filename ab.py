@@ -554,13 +554,22 @@ def cancel_anonymous(call):
     bot.send_message(user_id, "❌ عملیات ارسال پیام ناشناس لغو شد.", parse_mode='Markdown')
     main_panel(user_id)
 
-# ========== هندلر پاسخ به پیام ناشناس (اصلاح‌شده) ==========
+# ========== هندلر پاسخ به پیام ناشناس (اصلاح‌شده برای رفع خطای unpack) ==========
 @bot.callback_query_handler(func=lambda call: call.data.startswith("reply_anon_"))
 def reply_anonymous(call):
     try:
-        _, clicker_id, owner_id = call.data.split("_")
-        clicker_id = int(clicker_id)
-        owner_id = int(owner_id)
+        parts = call.data.split("_")
+        # فرمت: reply_anon_{clicker_id}_{owner_id}
+        # اگر 4 بخش باشد: ['reply', 'anon', 'clicker_id', 'owner_id']
+        if len(parts) >= 4:
+            clicker_id = int(parts[2])
+            owner_id = int(parts[3])
+        else:
+            # برای حالت‌های قدیمی یا خطا
+            _, clicker_id, owner_id = call.data.split("_")
+            clicker_id = int(clicker_id)
+            owner_id = int(owner_id)
+        
         user_id = call.from_user.id
 
         # فقط گیرنده پیام اصلی (clicker) می‌تونه پاسخ بده
@@ -571,7 +580,7 @@ def reply_anonymous(call):
         # ذخیره در دیکشنری موقت
         reply_temp[user_id] = {"target": owner_id, "source": clicker_id}
 
-        # حذف دکمه‌های پیام قبلی (با try/except)
+        # حذف دکمه‌های پیام قبلی
         try:
             bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
         except Exception as e:
