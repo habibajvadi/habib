@@ -725,6 +725,17 @@ def back_to_panel_inline(call):
     main_panel(call.from_user.id)
     bot.answer_callback_query(call.id)
 
+# ========== دریافت لینک از تبلیغات (نمایش پنل کاربری) ==========
+@bot.callback_query_handler(func=lambda call: call.data == "get_my_link")
+def get_my_link_from_ad(call):
+    user_id = call.from_user.id
+    bot.answer_callback_query(call.id, "✅ در حال آماده‌سازی...")
+    try:
+        bot.delete_message(call.message.chat.id, call.message.message_id)
+    except:
+        pass
+    main_panel(user_id)
+
 # ========== ۴ دکمه اصلی (بیوگرافی، پیوی، عکس) بدون بررسی اشتراک ==========
 @bot.callback_query_handler(func=lambda call: call.data.startswith("bio_"))
 def show_bio(call):
@@ -1226,4 +1237,4 @@ def set_webhook():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
     set_webhook()
-    app.run(host='0.0.0.0', port=port) 
+    app.run(host='0.0.0.0', port=port)
