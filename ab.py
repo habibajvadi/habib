@@ -197,7 +197,10 @@ def get_owner_id_by_code(code):
         return None
 
 def get_owner_name(owner_id):
-    c.execute("SELECT user_name FROM users WHERE telegram_id = %s" if DATABASE_URL else "SELECT user_name FROM users WHERE telegram_id = ?", (owner_id,))
+    if DATABASE_URL:
+        c.execute("SELECT user_name FROM users WHERE telegram_id = %s", (owner_id,))
+    else:
+        c.execute("SELECT user_name FROM users WHERE telegram_id = ?", (owner_id,))
     row = c.fetchone()
     if row and row[0]:
         return row[0]
@@ -551,63 +554,97 @@ def cancel_anonymous(call):
     bot.send_message(user_id, "❌ عملیات ارسال پیام ناشناس لغو شد.", parse_mode='Markdown')
     main_panel(user_id)
 
-# ========== هندلر پاسخ به پیام ناشناس ==========
+# ========== هندلر پاسخ به پیام ناشناس (اصلاح‌شده) ==========
 @bot.callback_query_handler(func=lambda call: call.data.startswith("reply_anon_"))
 def reply_anonymous(call):
-    _, clicker_id, owner_id = call.data.split("_")
-    clicker_id = int(clicker_id)
-    owner_id = int(owner_id)
-    user_id = call.from_user.id
-    
-    # فقط clicker (گیرنده پیام اصلی) می‌تونه پاسخ بده
-    if user_id != clicker_id:
-        bot.answer_callback_query(call.id, "این دکمه برای شما نیست!", show_alert=True)
-        return
-    
-    # ثبت در دیکشنری موقت برای دریافت متن پاسخ
-    reply_temp[user_id] = {"target": owner_id, "source": clicker_id}
-    
     try:
-        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
-    except:
-        pass
-    
-    cancel_keyboard = InlineKeyboardMarkup()
-    cancel_keyboard.add(InlineKeyboardButton("❌ انصراف", callback_data="cancel_reply"))
-    
-    bot.send_message(
-        user_id,
-        "💬 **ارسال پاسخ ناشناس**\n\nلطفاً متن پاسخ خود را ارسال کنید.\nاین پیام **به صورت ناشناس** برای کاربر قبلی فرستاده خواهد شد.\n\n⚠️ توجه: نام و اطلاعات شما فاش نمی‌شود.",
-        reply_markup=cancel_keyboard,
-        parse_mode='Markdown'
-    )
-    bot.register_next_step_handler_by_chat_id(user_id, receive_reply_message, clicker_id, owner_id)
-    bot.answer_callback_query(call.id, "✅")
+        _, clicker_id, owner_id = call.data.split("_")
+        clicker_id = int(clicker_id)
+        owner_id = int(owner_id)
+        user_id = call.from_user.id
 
+        # فقط گیرنده پیام اصلی (clicker) می‌تونه پاسخ بده
+        if user_id != clicker_id:
+            bot.answer_callback_query(call.id, "این دکمه برای شما نیست!", show_alert=True)
+            return
+
+        # ذخیره در دیکشنری موقت
+        reply_temp[user_id] = {"target": owner_id, "source": clicker_id}
+
+        # حذف دکمه‌های پیام قبلی (با try/except)
+        try:
+            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+        except Exception as e:
+            print(f"Error editing reply markup: {e}")
+
+        # دکمه انصراف
+        cancel_keyboard = InlineKeyboardMarkup()
+        cancel_keyboard.add(InlineKeyboardButton("❌ انصراف", callback_data="cancel_reply"))
+
+        # ارسال پیام برای دریافت متن پاسخ
+        bot.send_message(
+            user_id,
+            "💬 **ارسال پاسخ ناشناس**\n\nلطفاً متن پاسخ خود را ارسال کنید.\nاین پیام **به صورت ناشناس** برای کاربر قبلی فرستاده خواهد شد.\n\n⚠️ توجه: نام و اطلاعات شما فاش نمی‌شود.",
+            reply_markup=cancel_keyboard,
+            parse_mode='Markdown'
+        )
+
+        # ثبت هندلر مرحله بعد
+        bot.register_next_step_handler_by_chat_id(user_id, receive_reply_message, clicker_id, owner_id)
+        bot.answer_callback_query(call.id, "✅ پیام خود را ارسال کنید.")
+
+    except Exception as e:
+        bot.answer_callback_query(call.id, f"❌ خطا: {str(e)}", show_alert=True)
+        print(f"Error in reply_anonymous: {e}")
+
+# ========== دریافت پاسخ از کاربر و ارسال به صاحب لینک (با دکمه پاسخ برای ادامه) ==========
 def receive_reply_message(message, clicker_id, owner_id):
     user_id = message.from_user.id
+
+    # بررسی اینکه آیا این کاربر درخواست پاسخ داده
     if user_id not in reply_temp:
+        bot.send_message(user_id, "⏳ شما درخواست پاسخ نداده‌اید یا زمان آن تمام شده است.")
+        main_panel(user_id)
         return
-    if message.text:
-        reply_text = message.text
-        try:
-            # ارسال پاسخ به owner (بدون دکمه پاسخ تا چرخه تموم بشه)
-            bot.send_message(
-                owner_id,
-                f"💌 **پاسخ ناشناس**\n\nکاربر فضول به شما پاسخ داده است:\n\n「 {reply_text} 」\n\n🔹 شما نمی‌توانید به این پاسخ پاسخ دهید.",
-                parse_mode='Markdown'
-            )
-            bot.send_message(user_id, "✅ **پاسخ شما با موفقیت ارسال شد!**", parse_mode='Markdown')
-        except Exception as e:
-            bot.send_message(user_id, f"❌ **خطا در ارسال پاسخ**\n\nخطا: {e}", parse_mode='Markdown')
-    else:
+
+    # اگر پیام متنی نبود
+    if not message.text:
         bot.send_message(user_id, "❌ لطفاً فقط متن ارسال کنید.", parse_mode='Markdown')
-    
+        # دوباره منتظر پیام متنی باشیم
+        bot.register_next_step_handler_by_chat_id(user_id, receive_reply_message, clicker_id, owner_id)
+        return
+
+    reply_text = message.text.strip()
+    if not reply_text:
+        bot.send_message(user_id, "❌ متن نمی‌تواند خالی باشد. دوباره ارسال کنید.")
+        bot.register_next_step_handler_by_chat_id(user_id, receive_reply_message, clicker_id, owner_id)
+        return
+
+    try:
+        # ارسال پاسخ به owner (صاحب لینک) با دکمه پاسخ برای ادامه گفتگو
+        keyboard = InlineKeyboardMarkup()
+        # استفاده از دکمه "anon" با همان پارامترها تا owner بتواند پاسخ دهد
+        keyboard.add(InlineKeyboardButton("💬 پاسخ ناشناس", callback_data=f"anon_{clicker_id}_{owner_id}"))
+
+        bot.send_message(
+            owner_id,
+            f"💌 **پاسخ ناشناس**\n\nکاربر فضول به شما پاسخ داده است:\n\n「 {reply_text} 」\n\n🔹 شما می‌توانید با دکمه زیر پاسخ دهید.",
+            reply_markup=keyboard,
+            parse_mode='Markdown'
+        )
+        bot.send_message(user_id, "✅ **پاسخ شما با موفقیت ارسال شد!**", parse_mode='Markdown')
+    except Exception as e:
+        bot.send_message(user_id, f"❌ **خطا در ارسال پاسخ**\n\nخطا: {e}", parse_mode='Markdown')
+        print(f"Error sending reply: {e}")
+
+    # پاک کردن دیکشنری موقت
     if user_id in reply_temp:
         del reply_temp[user_id]
-    
+
+    # بازگشت به پنل اصلی کاربر
     main_panel(user_id)
 
+# ========== لغو پاسخ ناشناس ==========
 @bot.callback_query_handler(func=lambda call: call.data == "cancel_reply")
 def cancel_reply(call):
     user_id = call.from_user.id
@@ -619,6 +656,7 @@ def cancel_reply(call):
         pass
     bot.send_message(user_id, "❌ عملیات ارسال پاسخ لغو شد.", parse_mode='Markdown')
     main_panel(user_id)
+    bot.answer_callback_query(call.id, "✅ لغو شد")
 
 # ========== دکمه‌های تله و پرداخت تستی ==========
 @bot.callback_query_handler(func=lambda call: call.data.startswith("cancel_"))
