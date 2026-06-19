@@ -1120,7 +1120,7 @@ def admin_panel(message):
         InlineKeyboardButton("🚫 کاربران بلاک‌کننده", callback_data="admin_blocked"),
         InlineKeyboardButton("📢 تبلیغات", callback_data="admin_advertise"),
         InlineKeyboardButton("📢 ارسال به همه کاربران", callback_data="admin_broadcast"),
-        InlineKeyboardButton("🗑 پاک کردن دیتابیس", callback_data="admin_clear"),
+  
         InlineKeyboardButton("🔙 بستن پنل", callback_data="admin_close")
     )
     
