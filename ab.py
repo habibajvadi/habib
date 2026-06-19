@@ -1167,18 +1167,28 @@ def admin_users(call):
         bot.answer_callback_query(call.id, "❌ شما دسترسی ندارید!", show_alert=True)
         return
     
+    # حذف پیام قبلی (پنل ادمین) برای جلوگیری از تداخل
     try:
-        # دریافت ۲۰۰ کاربر آخر
+        delete_message_safe(call.message.chat.id, call.message.message_id)
+    except:
+        pass
+    
+    try:
+        # دریافت ۸۰ کاربر آخر (عدد ۸۰ به‌خوبی در محدوده مجاز قرار می‌گیرد)
         if DATABASE_URL:
-            c.execute("SELECT telegram_id, user_name, link_code FROM users ORDER BY telegram_id DESC LIMIT 200")
+            c.execute("SELECT telegram_id, user_name, link_code FROM users ORDER BY telegram_id DESC LIMIT 80")
         else:
-            c.execute("SELECT telegram_id, user_name, link_code FROM users ORDER BY telegram_id DESC LIMIT 200")
+            c.execute("SELECT telegram_id, user_name, link_code FROM users ORDER BY telegram_id DESC LIMIT 80")
         
         users = c.fetchall()
         
         if not users:
             text = "📭 هیچ کاربری در دیتابیس یافت نشد."
-            edit_message_text_safe(call.message.chat.id, call.message.message_id, text, parse_mode='Markdown')
+            send_message_safe(user_id, text, parse_mode='Markdown')
+            # بازگشت به پنل ادمین با یک دکمه
+            back_keyboard = InlineKeyboardMarkup()
+            back_keyboard.add(InlineKeyboardButton("🔙 بازگشت به پنل", callback_data="back_to_panel"))
+            send_message_safe(user_id, "برای بازگشت کلیک کنید:", reply_markup=back_keyboard)
             bot.answer_callback_query(call.id)
             return
         
@@ -1187,32 +1197,31 @@ def admin_users(call):
         total_users = c.fetchone()[0]
         
         # ساخت لیست
-        text = f"👥 **لیست {len(users)} کاربر از {total_users} کاربر کل (۲۰۰ کاربر آخر):**\n\n"
+        text = f"👥 **لیست {len(users)} کاربر از {total_users} کاربر کل (۸۰ کاربر آخر):**\n\n"
         for uid, name, code in users:
             display_name = name if name else "بدون نام"
             text += f"• {display_name} (ID: `{uid}`)\n"
         
-        # اگر متن طولانی شد، به چند بخش تقسیم کن
+        # دکمه بازگشت به پنل ادمین
+        keyboard = InlineKeyboardMarkup()
+        keyboard.add(InlineKeyboardButton("🔙 بازگشت به پنل", callback_data="back_to_panel"))
+        
+        # ارسال پیام (اگر طولانی بود، تقسیم می‌شود)
         if len(text) > 4000:
-            # حذف پیام قبلی
-            try:
-                delete_message_safe(call.message.chat.id, call.message.message_id)
-            except:
-                pass
-            # ارسال به چند بخش
             parts = [text[i:i+4000] for i in range(0, len(text), 4000)]
-            for part in parts:
-                send_message_safe(call.message.chat.id, part, parse_mode='Markdown')
+            for i, part in enumerate(parts):
+                if i == 0:
+                    send_message_safe(user_id, part, parse_mode='Markdown')
+                else:
+                    send_message_safe(user_id, part, parse_mode='Markdown')
+            # ارسال دکمه بازگشت بعد از آخرین بخش
+            send_message_safe(user_id, "🔙 برای بازگشت به پنل:", reply_markup=keyboard)
         else:
-            # ویرایش پیام قبلی
-            edit_message_text_safe(call.message.chat.id, call.message.message_id, text, parse_mode='Markdown')
+            send_message_safe(user_id, text, reply_markup=keyboard, parse_mode='Markdown')
         
     except Exception as e:
         error_text = f"❌ خطا در دریافت لیست کاربران:\n\n`{str(e)}`"
-        try:
-            edit_message_text_safe(call.message.chat.id, call.message.message_id, error_text, parse_mode='Markdown')
-        except:
-            send_message_safe(call.message.chat.id, error_text, parse_mode='Markdown')
+        send_message_safe(user_id, error_text, parse_mode='Markdown')
         logger.error(f"Error in admin_users: {e}")
     
     bot.answer_callback_query(call.id)
