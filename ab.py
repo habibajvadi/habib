@@ -4,6 +4,7 @@ import time
 import requests
 import uuid
 import logging
+from collections import defaultdict
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
 import telebot
@@ -31,6 +32,18 @@ app = Flask(__name__)
 
 # محدودیت نرخ ارسال (Rate Limiting) - تاخیر بین پیام‌ها به ثانیه
 RATE_LIMIT_DELAY = 0.3
+
+# محدودیت نرخ کلیک (Click Rate Limiting) - جلوگیری از کلیک‌های سریع
+CLICK_COOLDOWN = 1  # زمان مورد نیاز بین دو کلیک (ثانیه)
+user_last_click = defaultdict(float)
+
+def is_rate_limited(user_id):
+    """بررسی می‌کند که کاربر در بازه زمانی مجاز کلیک کرده است یا خیر"""
+    now = time.time()
+    if now - user_last_click[user_id] < CLICK_COOLDOWN:
+        return True
+    user_last_click[user_id] = now
+    return False
 
 # ---------- دیتابیس (سازگار با PostgreSQL و SQLite) ----------
 DATABASE_URL = os.environ.get('DATABASE_URL')
@@ -737,6 +750,11 @@ def handle_help(message):
 # ========== پیام ناشناس رایگان (با قابلیت پاسخ و محدودیت ۱۰ عدد در روز برای ارسال اولیه) ==========
 @bot.callback_query_handler(func=lambda call: call.data.startswith("anon_"))
 def anonymous_message(call):
+    # بررسی محدودیت نرخ کلیک
+    if is_rate_limited(call.from_user.id):
+        bot.answer_callback_query(call.id, "⏳ لطفاً کمی صبر کنید!", show_alert=True)
+        return
+    
     _, clicker_id, owner_id = call.data.split("_")
     clicker_id, owner_id = int(clicker_id), int(owner_id)
     user_id = call.from_user.id
@@ -800,6 +818,11 @@ def cancel_anonymous(call):
 # ========== هندلر پاسخ به پیام ناشناس (با اعمال محدودیت ۱۰ پاسخ در روز) ==========
 @bot.callback_query_handler(func=lambda call: call.data.startswith("reply_anon_"))
 def reply_anonymous(call):
+    # بررسی محدودیت نرخ کلیک
+    if is_rate_limited(call.from_user.id):
+        bot.answer_callback_query(call.id, "⏳ لطفاً کمی صبر کنید!", show_alert=True)
+        return
+    
     try:
         parts = call.data.split("_")
         # فرمت: reply_anon_{clicker_id}_{owner_id}
@@ -925,6 +948,12 @@ def cancel_report_payment_page(call):
     if call.from_user.id != clicker_id:
         bot.answer_callback_query(call.id, "این دکمه مال تو نیست!", show_alert=True)
         return
+    
+    # بررسی محدودیت نرخ کلیک
+    if is_rate_limited(call.from_user.id):
+        bot.answer_callback_query(call.id, "⏳ لطفاً کمی صبر کنید!", show_alert=True)
+        return
+    
     if DATABASE_URL:
         c.execute("SELECT id FROM pending_reports WHERE link_code = %s AND clicker_id = %s AND cancelled = FALSE ORDER BY id DESC LIMIT 1", (code, clicker_id))
     else:
@@ -968,6 +997,11 @@ def show_details(call):
 
 @bot.callback_query_handler(func=lambda call: call.data == "back_to_panel")
 def back_to_panel_inline(call):
+    # بررسی محدودیت نرخ کلیک
+    if is_rate_limited(call.from_user.id):
+        bot.answer_callback_query(call.id, "⏳ لطفاً کمی صبر کنید!", show_alert=True)
+        return
+    
     try:
         edit_message_reply_markup_safe(call.message.chat.id, call.message.message_id, reply_markup=None)
     except:
@@ -978,6 +1012,11 @@ def back_to_panel_inline(call):
 # ========== دریافت لینک از تبلیغات (نمایش پنل کاربری) ==========
 @bot.callback_query_handler(func=lambda call: call.data == "get_my_link")
 def get_my_link_from_ad(call):
+    # بررسی محدودیت نرخ کلیک
+    if is_rate_limited(call.from_user.id):
+        bot.answer_callback_query(call.id, "⏳ لطفاً کمی صبر کنید!", show_alert=True)
+        return
+    
     user_id = call.from_user.id
     bot.answer_callback_query(call.id, "✅ در حال آماده‌سازی...")
     try:
@@ -1037,6 +1076,11 @@ def show_photo(call):
 # ========== دکمه‌های تبلیغاتی (ad) ==========
 @bot.callback_query_handler(func=lambda call: call.data.startswith("ad_"))
 def ad_buttons(call):
+    # بررسی محدودیت نرخ کلیک
+    if is_rate_limited(call.from_user.id):
+        bot.answer_callback_query(call.id, "⏳ لطفاً کمی صبر کنید!", show_alert=True)
+        return
+    
     action = call.data.split("_")[1]
     user_id = call.from_user.id
     
