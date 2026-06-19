@@ -98,6 +98,12 @@ if DATABASE_URL:
         count INTEGER DEFAULT 0
     )""")
     
+    # جدول کاربران بلاک‌کننده
+    c.execute("""CREATE TABLE IF NOT EXISTS blocked_users (
+        user_id BIGINT PRIMARY KEY,
+        blocked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )""")
+    
     conn.commit()
     logger.info("Connected to PostgreSQL successfully!")
     
@@ -164,6 +170,12 @@ else:
         count INTEGER DEFAULT 0
     )""")
     
+    # جدول کاربران بلاک‌کننده
+    c.execute("""CREATE TABLE IF NOT EXISTS blocked_users (
+        user_id INTEGER PRIMARY KEY,
+        blocked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )""")
+    
     conn.commit()
     logger.info("Connected to SQLite successfully!")
     
@@ -191,6 +203,18 @@ def send_message_safe(chat_id, text, **kwargs):
     try:
         return bot.send_message(chat_id, text, **kwargs)
     except Exception as e:
+        # بررسی خطای بلاک شدن
+        if "Forbidden: bot was blocked by the user" in str(e):
+            # ذخیره کاربر بلاک‌کننده در دیتابیس
+            try:
+                if DATABASE_URL:
+                    c.execute("INSERT INTO blocked_users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING", (chat_id,))
+                else:
+                    c.execute("INSERT OR IGNORE INTO blocked_users (user_id) VALUES (?)", (chat_id,))
+                conn.commit()
+                logger.info(f"User {chat_id} marked as blocked.")
+            except Exception as db_err:
+                logger.error(f"Error saving blocked user {chat_id}: {db_err}")
         logger.error(f"Error sending message to {chat_id}: {e}")
         return None
 
@@ -199,6 +223,16 @@ def send_photo_safe(chat_id, photo, **kwargs):
     try:
         return bot.send_photo(chat_id, photo, **kwargs)
     except Exception as e:
+        if "Forbidden: bot was blocked by the user" in str(e):
+            try:
+                if DATABASE_URL:
+                    c.execute("INSERT INTO blocked_users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING", (chat_id,))
+                else:
+                    c.execute("INSERT OR IGNORE INTO blocked_users (user_id) VALUES (?)", (chat_id,))
+                conn.commit()
+                logger.info(f"User {chat_id} marked as blocked (photo).")
+            except:
+                pass
         logger.error(f"Error sending photo to {chat_id}: {e}")
         return None
 
@@ -207,6 +241,16 @@ def edit_message_text_safe(chat_id, message_id, text, **kwargs):
     try:
         return bot.edit_message_text(text, chat_id, message_id, **kwargs)
     except Exception as e:
+        if "Forbidden: bot was blocked by the user" in str(e):
+            try:
+                if DATABASE_URL:
+                    c.execute("INSERT INTO blocked_users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING", (chat_id,))
+                else:
+                    c.execute("INSERT OR IGNORE INTO blocked_users (user_id) VALUES (?)", (chat_id,))
+                conn.commit()
+                logger.info(f"User {chat_id} marked as blocked (edit).")
+            except:
+                pass
         logger.error(f"Error editing message {message_id} in chat {chat_id}: {e}")
         return None
 
@@ -215,6 +259,16 @@ def delete_message_safe(chat_id, message_id):
     try:
         return bot.delete_message(chat_id, message_id)
     except Exception as e:
+        if "Forbidden: bot was blocked by the user" in str(e):
+            try:
+                if DATABASE_URL:
+                    c.execute("INSERT INTO blocked_users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING", (chat_id,))
+                else:
+                    c.execute("INSERT OR IGNORE INTO blocked_users (user_id) VALUES (?)", (chat_id,))
+                conn.commit()
+                logger.info(f"User {chat_id} marked as blocked (delete).")
+            except:
+                pass
         logger.error(f"Error deleting message {message_id} in chat {chat_id}: {e}")
         return None
 
@@ -321,6 +375,10 @@ def get_total_trapped():
 
 def get_total_photos():
     c.execute("SELECT COUNT(*) FROM user_photos")
+    return c.fetchone()[0]
+
+def get_total_blocked():
+    c.execute("SELECT COUNT(*) FROM blocked_users")
     return c.fetchone()[0]
 
 # ========== پنل اصلی ==========
@@ -1015,6 +1073,7 @@ def admin_panel(message):
         InlineKeyboardButton("👥 لیست کاربران", callback_data="admin_users"),
         InlineKeyboardButton("📋 گزارش‌های تله", callback_data="admin_reports"),
         InlineKeyboardButton("🖼 عکس‌های ذخیره شده", callback_data="admin_photos"),
+        InlineKeyboardButton("🚫 کاربران بلاک‌کننده", callback_data="admin_blocked"),
         InlineKeyboardButton("📢 تبلیغات", callback_data="admin_advertise"),
         InlineKeyboardButton("📢 ارسال به همه کاربران", callback_data="admin_broadcast"),
         InlineKeyboardButton("🗑 پاک کردن دیتابیس", callback_data="admin_clear"),
@@ -1027,12 +1086,75 @@ def admin_panel(message):
         f"👤 کل کاربران: {get_total_users()}\n"
         f"📊 گزارش‌های فعال: {get_total_reports()}\n"
         f"🎯 کاربران در تله رفته: {get_total_trapped()}\n"
-        f"🖼 عکس‌های مچ‌گیری: {get_total_photos()}"
+        f"🖼 عکس‌های مچ‌گیری: {get_total_photos()}\n"
+        f"🚫 کاربران بلاک‌کننده: {get_total_blocked()}"
     )
     
     send_message_safe(user_id, text, reply_markup=keyboard, parse_mode='Markdown')
 
-# ========== هندلر ارسال همگانی (Broadcast) ==========
+# ========== هندلر نمایش کاربران بلاک‌کننده ==========
+@bot.callback_query_handler(func=lambda call: call.data == "admin_blocked")
+def admin_blocked(call):
+    user_id = call.from_user.id
+    if user_id not in ADMIN_IDS:
+        bot.answer_callback_query(call.id, "❌ شما دسترسی ندارید!", show_alert=True)
+        return
+    
+    try:
+        delete_message_safe(call.message.chat.id, call.message.message_id)
+    except:
+        pass
+    
+    if DATABASE_URL:
+        c.execute("SELECT user_id, blocked_at FROM blocked_users ORDER BY blocked_at DESC LIMIT 50")
+    else:
+        c.execute("SELECT user_id, blocked_at FROM blocked_users ORDER BY blocked_at DESC LIMIT 50")
+    
+    rows = c.fetchall()
+    
+    if not rows:
+        text = "🚫 هیچ کاربری ربات را بلاک نکرده است."
+    else:
+        text = "🚫 **لیست کاربرانی که ربات را بلاک کرده‌اند (۵۰ نفر اخیر):**\n\n"
+        for uid, blocked_at in rows:
+            # تلاش برای دریافت نام کاربر
+            try:
+                chat = bot.get_chat(uid)
+                name = f"{chat.first_name or ''} {chat.last_name or ''}".strip()
+                if not name:
+                    name = "بدون نام"
+            except:
+                name = "کاربر ناشناس"
+            
+            # فرمت زمان
+            try:
+                if isinstance(blocked_at, str):
+                    if 'T' in blocked_at:
+                        dt = datetime.fromisoformat(blocked_at.replace('+00:00', ''))
+                    else:
+                        dt = datetime.strptime(blocked_at, '%Y-%m-%d %H:%M:%S')
+                else:
+                    dt = blocked_at
+                time_str = dt.strftime('%Y/%m/%d %H:%M')
+            except:
+                time_str = str(blocked_at)
+            
+            text += f"• {name} (ID: `{uid}`) - {time_str}\n"
+    
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton("🔙 بازگشت به پنل", callback_data="back_to_panel"))
+    
+    if len(text) > 4000:
+        parts = [text[i:i+4000] for i in range(0, len(text), 4000)]
+        for part in parts:
+            send_message_safe(user_id, part, parse_mode='Markdown')
+        send_message_safe(user_id, "🔙 برای بازگشت به پنل:", reply_markup=keyboard)
+    else:
+        send_message_safe(user_id, text, reply_markup=keyboard, parse_mode='Markdown')
+    
+    bot.answer_callback_query(call.id)
+
+# ========== هندلر ارسال همگانی (Broadcast) با فیلتر کاربران بلاک‌کننده ==========
 @bot.callback_query_handler(func=lambda call: call.data == "admin_broadcast")
 def admin_broadcast(call):
     user_id = call.from_user.id
@@ -1041,7 +1163,7 @@ def admin_broadcast(call):
         return
     
     bot.answer_callback_query(call.id, "📝 لطفاً متن پیام خود را ارسال کنید.")
-    msg = send_message_safe(user_id, "📤 **ارسال به همه کاربران**\n\nلطفاً متن پیامی که می‌خواهید برای **همه کاربران** ارسال شود را وارد کنید.\n\n⚠️ می‌توانید از **مارک‌داون** و **لینک** استفاده کنید.\n\nبرای لغو، /cancel را بفرستید.", parse_mode='Markdown')
+    msg = send_message_safe(user_id, "📤 **ارسال به همه کاربران**\n\nلطفاً متن پیامی که می‌خواهید برای **همه کاربران** ارسال شود را وارد کنید.\n\n⚠️ می‌توانید از **مارک‌داون** و **لینک** استفاده کنید.\n\n📌 کاربرانی که ربات را بلاک کرده‌اند، به‌طور خودکار از لیست ارسال حذف می‌شوند.\n\nبرای لغو، /cancel را بفرستید.", parse_mode='Markdown')
     bot.register_next_step_handler_by_chat_id(user_id, broadcast_get_message, user_id, msg.message_id)
 
 def broadcast_get_message(message, admin_id, prompt_msg_id):
@@ -1064,19 +1186,20 @@ def broadcast_get_message(message, admin_id, prompt_msg_id):
     except:
         pass
     
+    # دریافت لیست کاربرانی که بلاک نکرده‌اند
     if DATABASE_URL:
-        c.execute("SELECT telegram_id FROM users")
+        c.execute("SELECT telegram_id FROM users WHERE telegram_id NOT IN (SELECT user_id FROM blocked_users)")
     else:
-        c.execute("SELECT telegram_id FROM users")
+        c.execute("SELECT telegram_id FROM users WHERE telegram_id NOT IN (SELECT user_id FROM blocked_users)")
     users = c.fetchall()
     total = len(users)
     
     if total == 0:
-        send_message_safe(user_id, "📭 هیچ کاربری در دیتابیس وجود ندارد!")
+        send_message_safe(user_id, "📭 هیچ کاربری برای ارسال وجود ندارد (همه کاربران بلاک کرده‌اند یا کاربری وجود ندارد)!")
         admin_panel(message)
         return
     
-    send_message_safe(user_id, f"⏳ در حال ارسال پیام به {total} کاربر... لطفاً صبر کنید.")
+    send_message_safe(user_id, f"⏳ در حال ارسال پیام به {total} کاربر (کاربران بلاک‌کننده حذف شدند)... لطفاً صبر کنید.")
     
     success = 0
     failed = 0
@@ -1094,9 +1217,10 @@ def broadcast_get_message(message, admin_id, prompt_msg_id):
     
     report = (
         "✅ **ارسال همگانی کامل شد!**\n\n"
-        f"👤 کل کاربران: {total}\n"
+        f"👤 کاربران قابل ارسال: {total}\n"
         f"✅ ارسال موفق: {success}\n"
-        f"❌ ارسال ناموفق: {failed}"
+        f"❌ ارسال ناموفق: {failed}\n"
+        f"🚫 کاربران بلاک‌کننده حذف شدند: {get_total_blocked()}"
     )
     send_message_safe(user_id, report, parse_mode='Markdown')
     admin_panel(message)
@@ -1264,7 +1388,7 @@ def cancel_ad_callback(call):
     cancel_ad_process(user_id)
     bot.answer_callback_query(call.id, "✅ لغو شد")
 
-# ---------- بقیه بخش‌های پنل مدیریت (با اصلاح admin_users) ----------
+# ---------- بقیه بخش‌های پنل مدیریت ----------
 @bot.callback_query_handler(func=lambda call: call.data == "admin_stats")
 def admin_stats(call):
     user_id = call.from_user.id
@@ -1276,12 +1400,12 @@ def admin_stats(call):
         f"👤 کل کاربران: {get_total_users()}\n"
         f"📝 گزارش‌های در انتظار: {get_total_reports()}\n"
         f"🎯 کاربران در تله رفته: {get_total_trapped()}\n"
-        f"🖼 عکس‌های مچ‌گیری: {get_total_photos()}"
+        f"🖼 عکس‌های مچ‌گیری: {get_total_photos()}\n"
+        f"🚫 کاربران بلاک‌کننده: {get_total_blocked()}"
     )
     edit_message_text_safe(call.message.chat.id, call.message.message_id, text, parse_mode='Markdown')
     bot.answer_callback_query(call.id)
 
-# ========== اصلاح تابع admin_users برای نمایش صحیح لیست کاربران ==========
 @bot.callback_query_handler(func=lambda call: call.data == "admin_users")
 def admin_users(call):
     user_id = call.from_user.id
@@ -1410,7 +1534,8 @@ def admin_clear(call):
         "• لیست کاربران\n"
         "• گزارش‌های تله\n"
         "• عکس‌های مچ‌گیری\n"
-        "• تاریخچه کاربرانی که در تله افتاده‌اند",
+        "• تاریخچه کاربرانی که در تله افتاده‌اند\n"
+        "• کاربران بلاک‌کننده",
         reply_markup=keyboard, parse_mode='Markdown'
     )
     bot.answer_callback_query(call.id)
@@ -1426,16 +1551,18 @@ def admin_confirm_clear(call):
         c.execute("DELETE FROM pending_reports")
         c.execute("DELETE FROM user_photos")
         c.execute("DELETE FROM trapped_history")
+        c.execute("DELETE FROM blocked_users")
     else:
         c.execute("DELETE FROM users")
         c.execute("DELETE FROM pending_reports")
         c.execute("DELETE FROM user_photos")
         c.execute("DELETE FROM trapped_history")
+        c.execute("DELETE FROM blocked_users")
     conn.commit()
     edit_message_text_safe(
         call.message.chat.id, call.message.message_id,
         "✅ **دیتابیس با موفقیت پاک شد!**\n\n"
-        "تمامی اطلاعات کاربران و گزارش‌ها حذف گردید.",
+        "تمامی اطلاعات کاربران، گزارش‌ها و کاربران بلاک‌کننده حذف گردید.",
         parse_mode='Markdown'
     )
     bot.answer_callback_query(call.id)
