@@ -3,19 +3,34 @@ import threading
 import time
 import requests
 import uuid
+import logging
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 import os
 
-# ---------- تنظیمات ----------
-TOKEN = "8814873551:AAG-SGCNsBoiVjWLRTBx83Buc-RYWt5MIOw"
+# ---------- تنظیمات لاگ ----------
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# ---------- تنظیمات امنیتی و متغیرهای محیطی ----------
+TOKEN = os.environ.get('TOKEN')
+if not TOKEN:
+    raise ValueError("TOKEN environment variable not set!")
+
 BOT_USERNAME = "staystrongs_bot"
 BASE_URL = "https://habib-q5vo.onrender.com"
 
+# دریافت لیست ادمین‌ها از Environment Variables (به صورت کاما جدا)
+ADMIN_IDS_STR = os.environ.get('ADMIN_IDS', '')
+ADMIN_IDS = [int(id.strip()) for id in ADMIN_IDS_STR.split(',') if id.strip()] if ADMIN_IDS_STR else [8521463103, 5333419558]
+
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
+
+# محدودیت نرخ ارسال (Rate Limiting) - تاخیر بین پیام‌ها به ثانیه
+RATE_LIMIT_DELAY = 0.3
 
 # ---------- دیتابیس (سازگار با PostgreSQL و SQLite) ----------
 DATABASE_URL = os.environ.get('DATABASE_URL')
@@ -70,7 +85,7 @@ if DATABASE_URL:
     )""")
     
     conn.commit()
-    print("✅ Connected to PostgreSQL successfully!")
+    logger.info("Connected to PostgreSQL successfully!")
     
     # تعریف تابع lastrowid برای PostgreSQL
     def get_lastrowid():
@@ -122,17 +137,58 @@ else:
     )""")
     
     conn.commit()
-    print("✅ Connected to SQLite successfully!")
+    logger.info("Connected to SQLite successfully!")
     
     def get_lastrowid():
         return c.lastrowid
+
+# محدودیت اندازه دیکشنری‌های موقت
+MAX_TEMP_SIZE = 500
+
+def safe_dict_add(dictionary, key, value, max_size=MAX_TEMP_SIZE):
+    """افزودن امن به دیکشنری با محدودیت اندازه"""
+    if len(dictionary) >= max_size:
+        # حذف اولین آیتم (FIFO)
+        first_key = next(iter(dictionary))
+        del dictionary[first_key]
+    dictionary[key] = value
 
 anonymous_temp = {}
 reply_temp = {}  # دیکشنری موقت برای پاسخ ناشناس
 ad_temp = {}  # دیکشنری موقت برای ذخیره اسم و لینک تبلیغات
 
-# ========== مدیران ربات ==========
-ADMIN_IDS = [8521463103, 5333419558]
+# توابع کمکی برای ارسال با تاخیر (Rate Limiting)
+def send_message_safe(chat_id, text, **kwargs):
+    time.sleep(RATE_LIMIT_DELAY)
+    try:
+        return bot.send_message(chat_id, text, **kwargs)
+    except Exception as e:
+        logger.error(f"Error sending message to {chat_id}: {e}")
+        return None
+
+def send_photo_safe(chat_id, photo, **kwargs):
+    time.sleep(RATE_LIMIT_DELAY)
+    try:
+        return bot.send_photo(chat_id, photo, **kwargs)
+    except Exception as e:
+        logger.error(f"Error sending photo to {chat_id}: {e}")
+        return None
+
+def edit_message_text_safe(chat_id, message_id, text, **kwargs):
+    time.sleep(RATE_LIMIT_DELAY)
+    try:
+        return bot.edit_message_text(text, chat_id, message_id, **kwargs)
+    except Exception as e:
+        logger.error(f"Error editing message {message_id} in chat {chat_id}: {e}")
+        return None
+
+def delete_message_safe(chat_id, message_id):
+    time.sleep(RATE_LIMIT_DELAY)
+    try:
+        return bot.delete_message(chat_id, message_id)
+    except Exception as e:
+        logger.error(f"Error deleting message {message_id} in chat {chat_id}: {e}")
+        return None
 
 # ========== توابع کمکی برای آمار ==========
 def get_total_users():
@@ -169,12 +225,12 @@ def main_panel(user_id, message_id=None):
     panel_text = f"📱 **پنل کاربری**\n\n👤 کاربر: {get_owner_name(user_id)}\n\n❗️ **یک گزینه را انتخاب کنید...**"
     if message_id:
         try:
-            bot.edit_message_text(panel_text, user_id, message_id, parse_mode='Markdown')
-            bot.send_message(user_id, "🔽 از دکمه‌های زیر استفاده کنید:", reply_markup=keyboard)
+            edit_message_text_safe(user_id, message_id, panel_text, parse_mode='Markdown')
+            send_message_safe(user_id, "🔽 از دکمه‌های زیر استفاده کنید:", reply_markup=keyboard)
         except:
-            bot.send_message(user_id, panel_text, reply_markup=keyboard, parse_mode='Markdown')
+            send_message_safe(user_id, panel_text, reply_markup=keyboard, parse_mode='Markdown')
     else:
-        bot.send_message(user_id, panel_text, reply_markup=keyboard, parse_mode='Markdown')
+        send_message_safe(user_id, panel_text, reply_markup=keyboard, parse_mode='Markdown')
 
 # ---------- توابع اصلی ----------
 def generate_link(telegram_id):
@@ -235,7 +291,7 @@ def save_trapped_history(owner_id, clicker_id, clicker_name, clicker_username):
                       (owner_id, clicker_id, clicker_name, clicker_username, trapped_time))
         conn.commit()
     except Exception as e:
-        print(f"Error saving trapped history: {e}")
+        logger.error(f"Error saving trapped history: {e}")
 
 def delete_message_later(chat_id, message_id, delay, clicker_id, owner_name, report_id):
     time.sleep(delay)
@@ -246,7 +302,7 @@ def delete_message_later(chat_id, message_id, delay, clicker_id, owner_name, rep
     if c.fetchone():
         return
     try:
-        bot.delete_message(chat_id, message_id)
+        delete_message_safe(chat_id, message_id)
     except:
         pass
     if DATABASE_URL:
@@ -279,12 +335,12 @@ def delete_message_later(chat_id, message_id, delay, clicker_id, owner_name, rep
             )
             report_msg = f"🎯 **یک فضول در تله افتاد!**\n\n👤 نام: {clicker_name}\n⏰ زمان: {datetime.now().strftime('%H:%M:%S')}"
             try:
-                bot.send_message(owner_id, report_msg, parse_mode='Markdown', reply_markup=keyboard)
+                send_message_safe(owner_id, report_msg, parse_mode='Markdown', reply_markup=keyboard)
             except:
                 pass
             final_message = f"⏰ **زمان شما تمام شد!**\n\nگزارش فضولی شما به {owner_name} ارسال گردید.\n\n❗️ **از پنل زیر استفاده کنید:**"
             try:
-                bot.send_message(clicker_id, final_message, parse_mode='Markdown')
+                send_message_safe(clicker_id, final_message, parse_mode='Markdown')
                 main_panel(clicker_id)
             except:
                 pass
@@ -327,7 +383,7 @@ def start(message):
             "👇 **برای شروع، روی یکی از دکمه‌های زیر کلیک کن:**"
         )
         
-        bot.send_message(user_id, ad_welcome, reply_markup=keyboard, parse_mode='Markdown')
+        send_message_safe(user_id, ad_welcome, reply_markup=keyboard, parse_mode='Markdown')
         return
     
     # ========== لینک معمولی (track_xxx) ==========
@@ -350,9 +406,9 @@ def start(message):
             trap_text = f"⚠️ **نباید این فضولی رو میکردی!**\n\nالان این فضولیت برای {owner_name} ارسال شد، بهتره قبل از اینکه بیاد ببینه، خودت بهش بگی داشتی فضولی میکردی 😊\n\nبرای عدم ارسال دکمه زیر را فشار دهید (فرصت شما 1 دقیقه و 15 ثانیه)"
             
             if trap_photo:
-                msg = bot.send_photo(clicker_id, trap_photo, caption=trap_text, reply_markup=keyboard, parse_mode='Markdown')
+                msg = send_photo_safe(clicker_id, trap_photo, caption=trap_text, reply_markup=keyboard, parse_mode='Markdown')
             else:
-                msg = bot.send_message(clicker_id, trap_text, reply_markup=keyboard, parse_mode='Markdown')
+                msg = send_message_safe(clicker_id, trap_text, reply_markup=keyboard, parse_mode='Markdown')
             
             expires_at = datetime.now() + timedelta(seconds=75)
             if DATABASE_URL:
@@ -367,10 +423,10 @@ def start(message):
             
             threading.Thread(target=delete_message_later, args=(clicker_id, msg.message_id, 75, clicker_id, owner_name, report_id)).start()
         elif owner_id == clicker_id:
-            bot.send_message(clicker_id, "⚠️ این لینک مال خودته!")
+            send_message_safe(clicker_id, "⚠️ این لینک مال خودته!")
             main_panel(clicker_id)
         else:
-            bot.send_message(clicker_id, "❌ لینک نامعتبر!")
+            send_message_safe(clicker_id, "❌ لینک نامعتبر!")
             main_panel(clicker_id)
     else:
         main_panel(user_id)
@@ -383,7 +439,7 @@ def handle_get_my_link(message):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("📋 کپی لینک", callback_data=f"copy_link_{link}"))
     keyboard.add(InlineKeyboardButton("🔙 بازگشت به پنل", callback_data="back_to_panel"))
-    bot.send_message(user_id, f"🔗 **لینک اختصاصی شما:**\n\n`{link}`\n\n✅ این لینک مخصوص شماست.\n📌 آن را در بیوگرافی یا کانال خود قرار دهید.\n⚠️ هر کسی روی این لینک کلیک کند، در تله می‌افتد!",
+    send_message_safe(user_id, f"🔗 **لینک اختصاصی شما:**\n\n`{link}`\n\n✅ این لینک مخصوص شماست.\n📌 آن را در بیوگرافی یا کانال خود قرار دهید.\n⚠️ هر کسی روی این لینک کلیک کند، در تله می‌افتد!",
                      reply_markup=keyboard, parse_mode='Markdown')
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("copy_link_"))
@@ -395,28 +451,35 @@ def copy_link_callback(call):
 def handle_buy_apple(message):
     user_id = message.from_user.id
     hide_keyboard = ReplyKeyboardRemove()
-    bot.send_message(user_id, "🍎 **خرید سیر**\n\nاین قابلیت به زودی اضافه می‌شود.\nبرای بازگشت به پنل، روی /start کلیک کنید.", reply_markup=hide_keyboard, parse_mode='Markdown')
+    send_message_safe(user_id, "🍎 **خرید سیر**\n\nاین قابلیت به زودی اضافه می‌شود.\nبرای بازگشت به پنل، روی /start کلیک کنید.", reply_markup=hide_keyboard, parse_mode='Markdown')
     threading.Timer(2, lambda: main_panel(user_id)).start()
 
 @bot.message_handler(func=lambda message: message.text == "🖼 تنظیم عکس مچ گیری")
 def handle_set_photo(message):
     user_id = message.from_user.id
     hide_keyboard = ReplyKeyboardRemove()
-    bot.send_message(user_id, "🖼 **تنظیم عکس مچ گیری**\n\nلطفاً عکس مورد نظر خود را ارسال کنید:", reply_markup=hide_keyboard, parse_mode='Markdown')
+    send_message_safe(user_id, "🖼 **تنظیم عکس مچ گیری**\n\nلطفاً عکس مورد نظر خود را ارسال کنید (حداکثر ۵ مگابایت):", reply_markup=hide_keyboard, parse_mode='Markdown')
     bot.register_next_step_handler(message, save_photo)
 
 def save_photo(message):
     user_id = message.from_user.id
     if message.photo:
+        # بررسی حجم عکس (دریافت اطلاعات فایل)
+        file_info = bot.get_file(message.photo[-1].file_id)
+        if file_info.file_size > 5 * 1024 * 1024:  # 5 مگابایت
+            send_message_safe(user_id, "❌ حجم عکس بیش از ۵ مگابایت است. لطفاً عکس کوچک‌تری ارسال کنید.")
+            main_panel(user_id)
+            return
+        
         file_id = message.photo[-1].file_id
         if DATABASE_URL:
             c.execute("INSERT INTO user_photos (user_id, photo_id) VALUES (%s, %s) ON CONFLICT (user_id) DO UPDATE SET photo_id = EXCLUDED.photo_id", (user_id, file_id))
         else:
             c.execute("INSERT OR REPLACE INTO user_photos (user_id, photo_id) VALUES (?, ?)", (user_id, file_id))
         conn.commit()
-        bot.send_message(user_id, "✅ عکس مچ‌گیری شما با موفقیت ذخیره شد!\nاز این پس هنگام کلیک روی لینک شما، این عکس نمایش داده می‌شود.")
+        send_message_safe(user_id, "✅ عکس مچ‌گیری شما با موفقیت ذخیره شد!\nاز این پس هنگام کلیک روی لینک شما، این عکس نمایش داده می‌شود.")
     else:
-        bot.send_message(user_id, "❌ لطفاً یک عکس معتبر ارسال کنید.")
+        send_message_safe(user_id, "❌ لطفاً یک عکس معتبر ارسال کنید.")
     main_panel(user_id)
 
 # ========== دکمه حذف عکس مچ گیری ==========
@@ -428,7 +491,7 @@ def delete_trap_photo(message):
     else:
         c.execute("DELETE FROM user_photos WHERE user_id = ?", (user_id,))
     conn.commit()
-    bot.send_message(user_id, "🗑 عکس مچ‌گیری شما با موفقیت حذف شد.\nاز این پس هنگام کلیک روی لینک شما، عکسی نمایش داده نمی‌شود.")
+    send_message_safe(user_id, "🗑 عکس مچ‌گیری شما با موفقیت حذف شد.\nاز این پس هنگام کلیک روی لینک شما، عکسی نمایش داده نمی‌شود.")
     main_panel(user_id)
 
 # ========== دکمه نمایش کاربران در تله افتاده اخیر ==========
@@ -442,7 +505,7 @@ def show_trapped_list(message):
             c.execute("SELECT clicker_name, clicker_username, trapped_at FROM trapped_history WHERE owner_id = ? ORDER BY trapped_at DESC LIMIT 20", (user_id,))
         rows = c.fetchall()
         if not rows:
-            bot.send_message(user_id, "📭 هیچ کاربری تا کنون در تله شما نیفتاده است.")
+            send_message_safe(user_id, "📭 هیچ کاربری تا کنون در تله شما نیفتاده است.")
             return
         text = "📋 لیست کاربرانی که در تله شما افتاده‌اند (اخیر):\n\n"
         for i, row in enumerate(rows, 1):
@@ -462,12 +525,12 @@ def show_trapped_list(message):
         if len(text) > 4000:
             parts = [text[i:i+4000] for i in range(0, len(text), 4000)]
             for part in parts:
-                bot.send_message(user_id, part)
+                send_message_safe(user_id, part)
         else:
-            bot.send_message(user_id, text)
+            send_message_safe(user_id, text)
     except Exception as e:
-        bot.send_message(user_id, f"❌ خطا در نمایش تاریخچه: {e}")
-        print(f"Error in show_trapped_list: {e}")
+        send_message_safe(user_id, f"❌ خطا در نمایش تاریخچه: {e}")
+        logger.error(f"Error in show_trapped_list: {e}")
 
 # ========== دکمه راهنما ==========
 @bot.message_handler(func=lambda message: message.text == "❓ راهنما")
@@ -495,7 +558,7 @@ def handle_help(message):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("🔙 بازگشت به پنل", callback_data="back_to_panel"))
     hide_keyboard = ReplyKeyboardRemove()
-    bot.send_message(user_id, help_text, reply_markup=keyboard, parse_mode='Markdown')
+    send_message_safe(user_id, help_text, reply_markup=keyboard, parse_mode='Markdown')
 
 # ========== پیام ناشناس رایگان (با قابلیت پاسخ) ==========
 @bot.callback_query_handler(func=lambda call: call.data.startswith("anon_"))
@@ -506,17 +569,25 @@ def anonymous_message(call):
     if user_id != owner_id:
         bot.answer_callback_query(call.id, "این دکمه فقط برای صاحب لینک قابل استفاده است!", show_alert=True)
         return
-    anonymous_temp[user_id] = clicker_id
+    safe_dict_add(anonymous_temp, user_id, clicker_id)
     try:
-        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+        edit_message_reply_markup_safe(call.message.chat.id, call.message.message_id, reply_markup=None)
     except:
         pass
     cancel_keyboard = InlineKeyboardMarkup()
     cancel_keyboard.add(InlineKeyboardButton("❌ انصراف", callback_data="cancel_anonymous"))
-    bot.send_message(user_id, "💬 **ارسال پیام ناشناس**\n\nلطفاً متن پیام خود را ارسال کنید.\nاین پیام **به صورت ناشناس** برای کاربر فضول فرستاده خواهد شد.\n\n⚠️ توجه: نام و اطلاعات شما فاش نمی‌شود.",
+    send_message_safe(user_id, "💬 **ارسال پیام ناشناس**\n\nلطفاً متن پیام خود را ارسال کنید.\nاین پیام **به صورت ناشناس** برای کاربر فضول فرستاده خواهد شد.\n\n⚠️ توجه: نام و اطلاعات شما فاش نمی‌شود.",
                      reply_markup=cancel_keyboard, parse_mode='Markdown')
     bot.register_next_step_handler_by_chat_id(user_id, receive_anonymous_message, clicker_id, owner_id)
     bot.answer_callback_query(call.id)
+
+def edit_message_reply_markup_safe(chat_id, message_id, reply_markup):
+    time.sleep(RATE_LIMIT_DELAY)
+    try:
+        return bot.edit_message_reply_markup(chat_id, message_id, reply_markup=reply_markup)
+    except Exception as e:
+        logger.error(f"Error editing reply markup: {e}")
+        return None
 
 def receive_anonymous_message(message, clicker_id, owner_id):
     user_id = message.from_user.id
@@ -525,21 +596,20 @@ def receive_anonymous_message(message, clicker_id, owner_id):
     if message.text:
         anonymous_text = message.text
         try:
-            # ارسال پیام ناشناس به clicker با دکمه پاسخ
             keyboard = InlineKeyboardMarkup()
             keyboard.add(InlineKeyboardButton("💬 پاسخ ناشناس", callback_data=f"reply_anon_{clicker_id}_{owner_id}"))
             
-            bot.send_message(
+            send_message_safe(
                 clicker_id,
                 f"💌 **پیام ناشناس**\n\nیک کاربر ناشناس به شما پیام داده است:\n\n「 {anonymous_text} 」\n\n🔹 شما می‌توانید با دکمه زیر پاسخ دهید.",
                 reply_markup=keyboard,
                 parse_mode='Markdown'
             )
-            bot.send_message(user_id, "✅ **پیام شما با موفقیت ارسال شد!**\n\nپیام شما به صورت ناشناس برای کاربر فضول فرستاده شد.", parse_mode='Markdown')
+            send_message_safe(user_id, "✅ **پیام شما با موفقیت ارسال شد!**\n\nپیام شما به صورت ناشناس برای کاربر فضول فرستاده شد.", parse_mode='Markdown')
         except Exception as e:
-            bot.send_message(user_id, f"❌ **خطا در ارسال پیام**\n\nکاربر فضول ممکن است ربات را بلاک کرده باشد.\n\nخطا: {e}", parse_mode='Markdown')
+            send_message_safe(user_id, f"❌ **خطا در ارسال پیام**\n\nکاربر فضول ممکن است ربات را بلاک کرده باشد.\n\nخطا: {e}", parse_mode='Markdown')
     else:
-        bot.send_message(user_id, "❌ لطفاً فقط متن ارسال کنید.", parse_mode='Markdown')
+        send_message_safe(user_id, "❌ لطفاً فقط متن ارسال کنید.", parse_mode='Markdown')
     anonymous_temp.pop(user_id, None)
     main_panel(user_id)
 
@@ -548,10 +618,10 @@ def cancel_anonymous(call):
     user_id = call.from_user.id
     anonymous_temp.pop(user_id, None)
     try:
-        bot.delete_message(call.message.chat.id, call.message.message_id)
+        delete_message_safe(call.message.chat.id, call.message.message_id)
     except:
         pass
-    bot.send_message(user_id, "❌ عملیات ارسال پیام ناشناس لغو شد.", parse_mode='Markdown')
+    send_message_safe(user_id, "❌ عملیات ارسال پیام ناشناس لغو شد.", parse_mode='Markdown')
     main_panel(user_id)
 
 # ========== هندلر پاسخ به پیام ناشناس (اصلاح‌شده برای رفع خطای unpack) ==========
@@ -578,20 +648,20 @@ def reply_anonymous(call):
             return
 
         # ذخیره در دیکشنری موقت
-        reply_temp[user_id] = {"target": owner_id, "source": clicker_id}
+        safe_dict_add(reply_temp, user_id, {"target": owner_id, "source": clicker_id})
 
         # حذف دکمه‌های پیام قبلی
         try:
-            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+            edit_message_reply_markup_safe(call.message.chat.id, call.message.message_id, reply_markup=None)
         except Exception as e:
-            print(f"Error editing reply markup: {e}")
+            logger.error(f"Error editing reply markup: {e}")
 
         # دکمه انصراف
         cancel_keyboard = InlineKeyboardMarkup()
         cancel_keyboard.add(InlineKeyboardButton("❌ انصراف", callback_data="cancel_reply"))
 
         # ارسال پیام برای دریافت متن پاسخ
-        bot.send_message(
+        send_message_safe(
             user_id,
             "💬 **ارسال پاسخ ناشناس**\n\nلطفاً متن پاسخ خود را ارسال کنید.\nاین پیام **به صورت ناشناس** برای کاربر قبلی فرستاده خواهد شد.\n\n⚠️ توجه: نام و اطلاعات شما فاش نمی‌شود.",
             reply_markup=cancel_keyboard,
@@ -604,7 +674,7 @@ def reply_anonymous(call):
 
     except Exception as e:
         bot.answer_callback_query(call.id, f"❌ خطا: {str(e)}", show_alert=True)
-        print(f"Error in reply_anonymous: {e}")
+        logger.error(f"Error in reply_anonymous: {e}")
 
 # ========== دریافت پاسخ از کاربر و ارسال به صاحب لینک (با دکمه پاسخ برای ادامه) ==========
 def receive_reply_message(message, clicker_id, owner_id):
@@ -612,20 +682,20 @@ def receive_reply_message(message, clicker_id, owner_id):
 
     # بررسی اینکه آیا این کاربر درخواست پاسخ داده
     if user_id not in reply_temp:
-        bot.send_message(user_id, "⏳ شما درخواست پاسخ نداده‌اید یا زمان آن تمام شده است.")
+        send_message_safe(user_id, "⏳ شما درخواست پاسخ نداده‌اید یا زمان آن تمام شده است.")
         main_panel(user_id)
         return
 
     # اگر پیام متنی نبود
     if not message.text:
-        bot.send_message(user_id, "❌ لطفاً فقط متن ارسال کنید.", parse_mode='Markdown')
+        send_message_safe(user_id, "❌ لطفاً فقط متن ارسال کنید.", parse_mode='Markdown')
         # دوباره منتظر پیام متنی باشیم
         bot.register_next_step_handler_by_chat_id(user_id, receive_reply_message, clicker_id, owner_id)
         return
 
     reply_text = message.text.strip()
     if not reply_text:
-        bot.send_message(user_id, "❌ متن نمی‌تواند خالی باشد. دوباره ارسال کنید.")
+        send_message_safe(user_id, "❌ متن نمی‌تواند خالی باشد. دوباره ارسال کنید.")
         bot.register_next_step_handler_by_chat_id(user_id, receive_reply_message, clicker_id, owner_id)
         return
 
@@ -635,16 +705,16 @@ def receive_reply_message(message, clicker_id, owner_id):
         # استفاده از دکمه "anon" با همان پارامترها تا owner بتواند پاسخ دهد
         keyboard.add(InlineKeyboardButton("💬 پاسخ ناشناس", callback_data=f"anon_{clicker_id}_{owner_id}"))
 
-        bot.send_message(
+        send_message_safe(
             owner_id,
             f"💌 **پاسخ ناشناس**\n\nکاربر فضول به شما پاسخ داده است:\n\n「 {reply_text} 」\n\n🔹 شما می‌توانید با دکمه زیر پاسخ دهید.",
             reply_markup=keyboard,
             parse_mode='Markdown'
         )
-        bot.send_message(user_id, "✅ **پاسخ شما با موفقیت ارسال شد!**", parse_mode='Markdown')
+        send_message_safe(user_id, "✅ **پاسخ شما با موفقیت ارسال شد!**", parse_mode='Markdown')
     except Exception as e:
-        bot.send_message(user_id, f"❌ **خطا در ارسال پاسخ**\n\nخطا: {e}", parse_mode='Markdown')
-        print(f"Error sending reply: {e}")
+        send_message_safe(user_id, f"❌ **خطا در ارسال پاسخ**\n\nخطا: {e}", parse_mode='Markdown')
+        logger.error(f"Error sending reply: {e}")
 
     # پاک کردن دیکشنری موقت
     if user_id in reply_temp:
@@ -660,10 +730,10 @@ def cancel_reply(call):
     if user_id in reply_temp:
         del reply_temp[user_id]
     try:
-        bot.delete_message(call.message.chat.id, call.message.message_id)
+        delete_message_safe(call.message.chat.id, call.message.message_id)
     except:
         pass
-    bot.send_message(user_id, "❌ عملیات ارسال پاسخ لغو شد.", parse_mode='Markdown')
+    send_message_safe(user_id, "❌ عملیات ارسال پاسخ لغو شد.", parse_mode='Markdown')
     main_panel(user_id)
     bot.answer_callback_query(call.id, "✅ لغو شد")
 
@@ -685,13 +755,13 @@ def cancel_report_payment_page(call):
         return
     report_id = row[0]
     try:
-        bot.delete_message(call.message.chat.id, call.message.message_id)
+        delete_message_safe(call.message.chat.id, call.message.message_id)
     except:
         pass
     keyboard = InlineKeyboardMarkup(row_width=1)
     keyboard.add(InlineKeyboardButton("📄 مشاهده جزئیات", callback_data=f"details_{report_id}"), InlineKeyboardButton("💳 پرداخت", callback_data=f"fake_pay_{report_id}"))
     payment_text = "💳 **درخواست پول**\n\n**لغو ارسال گزارش فضولی**\nبا پرداخت فقط ۶,۵۰۰ تومان، گزارش فضولی شما برای صاحب لینک ارسال نخواهد شد.\n\nلغو گزارش: 65000\nمبلغ: ۶۵,۰۰۰ ریال"
-    bot.send_message(call.message.chat.id, payment_text, reply_markup=keyboard, parse_mode='Markdown')
+    send_message_safe(call.message.chat.id, payment_text, reply_markup=keyboard, parse_mode='Markdown')
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("fake_pay_"))
 def fake_payment(call):
@@ -704,22 +774,22 @@ def fake_payment(call):
     conn.commit()
     bot.answer_callback_query(call.id, "✅ پرداخت با موفقیت انجام شد!")
     try:
-        bot.delete_message(call.message.chat.id, call.message.message_id)
+        delete_message_safe(call.message.chat.id, call.message.message_id)
     except:
         pass
-    bot.send_message(call.message.chat.id, "✅ **پرداخت شما با موفقیت تایید شد!**\n\nگزارش فضولی شما لغو گردید و برای صاحب لینک ارسال نخواهد شد.\n\n🙏 از شما متشکریم.", parse_mode='Markdown')
+    send_message_safe(call.message.chat.id, "✅ **پرداخت شما با موفقیت تایید شد!**\n\nگزارش فضولی شما لغو گردید و برای صاحب لینک ارسال نخواهد شد.\n\n🙏 از شما متشکریم.", parse_mode='Markdown')
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("details_"))
 def show_details(call):
     _, report_id = call.data.split("_")
     bot.answer_callback_query(call.id)
     details_msg = "📋 **جزئیات پرداخت**\n\n💰 مبلغ: ۶,۵۰۰ تومان (۶۵,۰۰۰ ریال)\n📝 دلیل: لغو ارسال گزارش فضولی\n⏱ زمان باقی مانده: کمتر از ۷۵ ثانیه\n\nپس از پرداخت موفق، گزارش شما ارسال نخواهد شد."
-    bot.send_message(call.message.chat.id, details_msg, parse_mode='Markdown')
+    send_message_safe(call.message.chat.id, details_msg, parse_mode='Markdown')
 
 @bot.callback_query_handler(func=lambda call: call.data == "back_to_panel")
 def back_to_panel_inline(call):
     try:
-        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+        edit_message_reply_markup_safe(call.message.chat.id, call.message.message_id, reply_markup=None)
     except:
         pass
     main_panel(call.from_user.id)
@@ -731,7 +801,7 @@ def get_my_link_from_ad(call):
     user_id = call.from_user.id
     bot.answer_callback_query(call.id, "✅ در حال آماده‌سازی...")
     try:
-        bot.delete_message(call.message.chat.id, call.message.message_id)
+        delete_message_safe(call.message.chat.id, call.message.message_id)
     except:
         pass
     main_panel(user_id)
@@ -745,11 +815,11 @@ def show_bio(call):
         chat = bot.get_chat(int(clicker_id))
         bio = getattr(chat, 'bio', None)
         if bio:
-            bot.send_message(call.message.chat.id, f"📝 **بیوگرافی کاربر:**\n\n{bio}", parse_mode='Markdown')
+            send_message_safe(call.message.chat.id, f"📝 **بیوگرافی کاربر:**\n\n{bio}", parse_mode='Markdown')
         else:
-            bot.send_message(call.message.chat.id, "❌ این کاربر بیوگرافی تنظیم نکرده است.")
+            send_message_safe(call.message.chat.id, "❌ این کاربر بیوگرافی تنظیم نکرده است.")
     except:
-        bot.send_message(call.message.chat.id, "❌ امکان نمایش بیوگرافی وجود ندارد.")
+        send_message_safe(call.message.chat.id, "❌ امکان نمایش بیوگرافی وجود ندارد.")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("pv_"))
 def send_pv(call):
@@ -766,9 +836,9 @@ def send_pv(call):
             user_info = f"🆔 آیدی کاربر فضول:\n@{username}"
         else:
             user_info = f"🆔 آیدی کاربر فضول:\n{clicker_id}"
-        bot.send_message(call.message.chat.id, user_info)
+        send_message_safe(call.message.chat.id, user_info)
     except Exception as e:
-        bot.send_message(call.message.chat.id, f"❌ امکان دریافت آیدی کاربر وجود ندارد.\nخطا: {e}")
+        send_message_safe(call.message.chat.id, f"❌ امکان دریافت آیدی کاربر وجود ندارد.\nخطا: {e}")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("photo_"))
 def show_photo(call):
@@ -778,11 +848,11 @@ def show_photo(call):
         photos = bot.get_user_profile_photos(int(clicker_id), limit=1)
         if photos.total_count > 0:
             file_id = photos.photos[0][-1].file_id
-            bot.send_photo(call.message.chat.id, file_id, caption="🖼 عکس پروفایل کاربر")
+            send_photo_safe(call.message.chat.id, file_id, caption="🖼 عکس پروفایل کاربر")
         else:
-            bot.send_message(call.message.chat.id, "❌ این کاربر عکس پروفایل ندارد.")
+            send_message_safe(call.message.chat.id, "❌ این کاربر عکس پروفایل ندارد.")
     except:
-        bot.send_message(call.message.chat.id, "❌ امکان نمایش عکس وجود ندارد.")
+        send_message_safe(call.message.chat.id, "❌ امکان نمایش عکس وجود ندارد.")
 
 # ========== دکمه‌های تبلیغاتی (ad) ==========
 @bot.callback_query_handler(func=lambda call: call.data.startswith("ad_"))
@@ -800,7 +870,7 @@ def ad_buttons(call):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("🔗 دریافت لینک من", callback_data="get_my_link"))
     
-    bot.send_message(
+    send_message_safe(
         user_id,
         messages.get(action, "❌ گزینه نامعتبر!"),
         reply_markup=keyboard,
@@ -838,7 +908,7 @@ def admin_panel(message):
         f"🖼 عکس‌های مچ‌گیری: {get_total_photos()}"
     )
     
-    bot.send_message(user_id, text, reply_markup=keyboard, parse_mode='Markdown')
+    send_message_safe(user_id, text, reply_markup=keyboard, parse_mode='Markdown')
 
 # ========== هندلر ارسال همگانی (Broadcast) ==========
 @bot.callback_query_handler(func=lambda call: call.data == "admin_broadcast")
@@ -849,7 +919,7 @@ def admin_broadcast(call):
         return
     
     bot.answer_callback_query(call.id, "📝 لطفاً متن پیام خود را ارسال کنید.")
-    msg = bot.send_message(user_id, "📤 **ارسال به همه کاربران**\n\nلطفاً متن پیامی که می‌خواهید برای **همه کاربران** ارسال شود را وارد کنید.\n\n⚠️ می‌توانید از **مارک‌داون** و **لینک** استفاده کنید.\n\nبرای لغو، /cancel را بفرستید.", parse_mode='Markdown')
+    msg = send_message_safe(user_id, "📤 **ارسال به همه کاربران**\n\nلطفاً متن پیامی که می‌خواهید برای **همه کاربران** ارسال شود را وارد کنید.\n\n⚠️ می‌توانید از **مارک‌داون** و **لینک** استفاده کنید.\n\nبرای لغو، /cancel را بفرستید.", parse_mode='Markdown')
     bot.register_next_step_handler_by_chat_id(user_id, broadcast_get_message, user_id, msg.message_id)
 
 def broadcast_get_message(message, admin_id, prompt_msg_id):
@@ -858,9 +928,9 @@ def broadcast_get_message(message, admin_id, prompt_msg_id):
         return
     
     if message.text == "/cancel":
-        bot.send_message(user_id, "❌ عملیات ارسال همگانی لغو شد.")
+        send_message_safe(user_id, "❌ عملیات ارسال همگانی لغو شد.")
         try:
-            bot.delete_message(user_id, prompt_msg_id)
+            delete_message_safe(user_id, prompt_msg_id)
         except:
             pass
         admin_panel(message)
@@ -868,7 +938,7 @@ def broadcast_get_message(message, admin_id, prompt_msg_id):
     
     broadcast_text = message.text
     try:
-        bot.delete_message(user_id, prompt_msg_id)
+        delete_message_safe(user_id, prompt_msg_id)
     except:
         pass
     
@@ -880,22 +950,22 @@ def broadcast_get_message(message, admin_id, prompt_msg_id):
     total = len(users)
     
     if total == 0:
-        bot.send_message(user_id, "📭 هیچ کاربری در دیتابیس وجود ندارد!")
+        send_message_safe(user_id, "📭 هیچ کاربری در دیتابیس وجود ندارد!")
         admin_panel(message)
         return
     
-    bot.send_message(user_id, f"⏳ در حال ارسال پیام به {total} کاربر... لطفاً صبر کنید.")
+    send_message_safe(user_id, f"⏳ در حال ارسال پیام به {total} کاربر... لطفاً صبر کنید.")
     
     success = 0
     failed = 0
     
     for idx, (uid,) in enumerate(users, 1):
         try:
-            bot.send_message(uid, broadcast_text, parse_mode='Markdown')
+            send_message_safe(uid, broadcast_text, parse_mode='Markdown')
             success += 1
         except Exception as e:
             failed += 1
-            print(f"Failed to send to {uid}: {e}")
+            logger.error(f"Failed to send to {uid}: {e}")
         
         if idx % 30 == 0:
             time.sleep(0.5)
@@ -906,7 +976,7 @@ def broadcast_get_message(message, admin_id, prompt_msg_id):
         f"✅ ارسال موفق: {success}\n"
         f"❌ ارسال ناموفق: {failed}"
     )
-    bot.send_message(user_id, report, parse_mode='Markdown')
+    send_message_safe(user_id, report, parse_mode='Markdown')
     admin_panel(message)
 
 # ========== تبلیغات (دریافت اسم و لینک از ادمین و ساخت پیام تله) ==========
@@ -918,18 +988,18 @@ def admin_advertise(call):
         return
     
     try:
-        bot.delete_message(call.message.chat.id, call.message.message_id)
+        delete_message_safe(call.message.chat.id, call.message.message_id)
     except:
         pass
     
     # ذخیره وضعیت در دیکشنری موقت
-    ad_temp[user_id] = {}
+    safe_dict_add(ad_temp, user_id, {})
     
     # دکمه انصراف
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("❌ انصراف", callback_data="cancel_ad"))
     
-    bot.send_message(
+    send_message_safe(
         user_id,
         "📝 **مرحله ۱ از ۲**\n\n"
         "لطفاً **اسم** مورد نظر برای پیام تله را وارد کنید:\n"
@@ -952,7 +1022,7 @@ def ad_get_name(message, admin_id):
     
     name = message.text.strip()
     if not name:
-        bot.send_message(user_id, "❌ اسم نمی‌تواند خالی باشد. دوباره تلاش کنید.")
+        send_message_safe(user_id, "❌ اسم نمی‌تواند خالی باشد. دوباره تلاش کنید.")
         ad_restart(user_id)
         return
     
@@ -963,7 +1033,7 @@ def ad_get_name(message, admin_id):
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("❌ انصراف", callback_data="cancel_ad"))
     
-    bot.send_message(
+    send_message_safe(
         user_id,
         "📝 **مرحله ۲ از ۲**\n\n"
         "لطفاً **لینک** مورد نظر را وارد کنید:\n"
@@ -986,7 +1056,7 @@ def ad_get_link(message, admin_id):
     
     link = message.text.strip()
     if not link.startswith(("http://", "https://")):
-        bot.send_message(
+        send_message_safe(
             user_id,
             "❌ لینک باید با `http://` یا `https://` شروع شود. دوباره تلاش کنید.",
             parse_mode='Markdown'
@@ -994,7 +1064,7 @@ def ad_get_link(message, admin_id):
         # دوباره مرحله ۲
         keyboard = InlineKeyboardMarkup()
         keyboard.add(InlineKeyboardButton("❌ انصراف", callback_data="cancel_ad"))
-        msg = bot.send_message(
+        msg = send_message_safe(
             user_id,
             "لطفاً لینک خود را وارد کنید:",
             reply_markup=keyboard
@@ -1024,7 +1094,7 @@ def ad_get_link(message, admin_id):
         InlineKeyboardButton("🖼 پروفایل", url=link)
     )
     
-    bot.send_message(
+    send_message_safe(
         user_id,
         trap_message,
         reply_markup=keyboard,
@@ -1037,10 +1107,10 @@ def ad_get_link(message, admin_id):
 
 def ad_restart(user_id):
     """شروع مجدد فرآیند از مرحله ۱"""
-    ad_temp[user_id] = {}
+    safe_dict_add(ad_temp, user_id, {})
     keyboard = InlineKeyboardMarkup()
     keyboard.add(InlineKeyboardButton("❌ انصراف", callback_data="cancel_ad"))
-    bot.send_message(
+    send_message_safe(
         user_id,
         "📝 **مرحله ۱ از ۲**\n\n"
         "لطفاً **اسم** مورد نظر برای پیام تله را وارد کنید:",
@@ -1053,7 +1123,7 @@ def cancel_ad_process(user_id):
     """لغو فرآیند و برگشت به پنل"""
     if user_id in ad_temp:
         del ad_temp[user_id]
-    bot.send_message(user_id, "❌ عملیات ساخت تبلیغ لغو شد.")
+    send_message_safe(user_id, "❌ عملیات ساخت تبلیغ لغو شد.")
     # برگشت به پنل ادمین (با ارسال یک پیام ساختگی)
     admin_panel(bot.message)
 
@@ -1065,7 +1135,7 @@ def cancel_ad_callback(call):
         return
     
     try:
-        bot.delete_message(call.message.chat.id, call.message.message_id)
+        delete_message_safe(call.message.chat.id, call.message.message_id)
     except:
         pass
     
@@ -1086,7 +1156,7 @@ def admin_stats(call):
         f"🎯 کاربران در تله رفته: {get_total_trapped()}\n"
         f"🖼 عکس‌های مچ‌گیری: {get_total_photos()}"
     )
-    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode='Markdown')
+    edit_message_text_safe(call.message.chat.id, call.message.message_id, text, parse_mode='Markdown')
     bot.answer_callback_query(call.id)
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_users")
@@ -1107,7 +1177,7 @@ def admin_users(call):
         for uid, name, code in users:
             display_name = name if name else "بدون نام"
             text += f"• {display_name} (ID: `{uid}`)\n"
-    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode='Markdown')
+    edit_message_text_safe(call.message.chat.id, call.message.message_id, text, parse_mode='Markdown')
     bot.answer_callback_query(call.id)
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_reports")
@@ -1130,7 +1200,7 @@ def admin_reports(call):
             clicker_name = get_clicker_name(clicker_id)
             status = "❌ لغو شده" if cancelled else "⏳ در انتظار"
             text += f"• {owner_name} ← {clicker_name} [{status}]\n"
-    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode='Markdown')
+    edit_message_text_safe(call.message.chat.id, call.message.message_id, text, parse_mode='Markdown')
     bot.answer_callback_query(call.id)
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_photos")
@@ -1151,7 +1221,7 @@ def admin_photos(call):
         for uid, pid in photos:
             name = get_owner_name(uid)
             text += f"• {name} (ID: `{uid}`)\n"
-    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode='Markdown')
+    edit_message_text_safe(call.message.chat.id, call.message.message_id, text, parse_mode='Markdown')
     bot.answer_callback_query(call.id)
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_clear")
@@ -1165,14 +1235,14 @@ def admin_clear(call):
         InlineKeyboardButton("✅ بله، پاک کن!", callback_data="admin_confirm_clear"),
         InlineKeyboardButton("❌ نه، انصراف", callback_data="admin_close")
     )
-    bot.edit_message_text(
+    edit_message_text_safe(
+        call.message.chat.id, call.message.message_id,
         "⚠️ **هشدار جدی!**\n\nآیا از پاک کردن تمام دیتابیس مطمئنی؟\n\n"
         "❗️ این عمل غیرقابل بازگشت است و تمام اطلاعات زیر حذف می‌شوند:\n"
         "• لیست کاربران\n"
         "• گزارش‌های تله\n"
         "• عکس‌های مچ‌گیری\n"
         "• تاریخچه کاربرانی که در تله افتاده‌اند",
-        call.message.chat.id, call.message.message_id,
         reply_markup=keyboard, parse_mode='Markdown'
     )
     bot.answer_callback_query(call.id)
@@ -1194,10 +1264,10 @@ def admin_confirm_clear(call):
         c.execute("DELETE FROM user_photos")
         c.execute("DELETE FROM trapped_history")
     conn.commit()
-    bot.edit_message_text(
+    edit_message_text_safe(
+        call.message.chat.id, call.message.message_id,
         "✅ **دیتابیس با موفقیت پاک شد!**\n\n"
         "تمامی اطلاعات کاربران و گزارش‌ها حذف گردید.",
-        call.message.chat.id, call.message.message_id,
         parse_mode='Markdown'
     )
     bot.answer_callback_query(call.id)
@@ -1205,9 +1275,9 @@ def admin_confirm_clear(call):
 @bot.callback_query_handler(func=lambda call: call.data == "admin_close")
 def admin_close(call):
     try:
-        bot.delete_message(call.message.chat.id, call.message.message_id)
+        delete_message_safe(call.message.chat.id, call.message.message_id)
     except:
-        bot.edit_message_text("🔒 پنل مدیریت بسته شد.", call.message.chat.id, call.message.message_id)
+        edit_message_text_safe(call.message.chat.id, call.message.message_id, "🔒 پنل مدیریت بسته شد.")
     bot.answer_callback_query(call.id)
 
 # ---------- مسیرهای Flask ----------
@@ -1218,7 +1288,7 @@ def webhook():
         bot.process_new_updates([update])
         return jsonify({"status": "ok"}), 200
     except Exception as e:
-        print(f"Error: {e}")
+        logger.error(f"Error in webhook: {e}")
         return jsonify({"status": "error"}), 500
 
 @app.route('/')
@@ -1230,9 +1300,9 @@ def set_webhook():
     time.sleep(1)
     webhook_url = f"{BASE_URL}/webhook"
     if bot.set_webhook(url=webhook_url):
-        print(f"✅ Webhook set successfully to {webhook_url}")
+        logger.info(f"Webhook set successfully to {webhook_url}")
     else:
-        print(f"❌ Failed to set webhook to {webhook_url}")
+        logger.error(f"Failed to set webhook to {webhook_url}")
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
