@@ -190,6 +190,14 @@ def delete_message_safe(chat_id, message_id):
         logger.error(f"Error deleting message {message_id} in chat {chat_id}: {e}")
         return None
 
+def edit_message_reply_markup_safe(chat_id, message_id, reply_markup):
+    time.sleep(RATE_LIMIT_DELAY)
+    try:
+        return bot.edit_message_reply_markup(chat_id, message_id, reply_markup=reply_markup)
+    except Exception as e:
+        logger.error(f"Error editing reply markup: {e}")
+        return None
+
 # ========== توابع کمکی برای آمار ==========
 def get_total_users():
     c.execute("SELECT COUNT(*) FROM users")
@@ -580,14 +588,6 @@ def anonymous_message(call):
                      reply_markup=cancel_keyboard, parse_mode='Markdown')
     bot.register_next_step_handler_by_chat_id(user_id, receive_anonymous_message, clicker_id, owner_id)
     bot.answer_callback_query(call.id)
-
-def edit_message_reply_markup_safe(chat_id, message_id, reply_markup):
-    time.sleep(RATE_LIMIT_DELAY)
-    try:
-        return bot.edit_message_reply_markup(chat_id, message_id, reply_markup=reply_markup)
-    except Exception as e:
-        logger.error(f"Error editing reply markup: {e}")
-        return None
 
 def receive_anonymous_message(message, clicker_id, owner_id):
     user_id = message.from_user.id
@@ -1142,7 +1142,7 @@ def cancel_ad_callback(call):
     cancel_ad_process(user_id)
     bot.answer_callback_query(call.id, "✅ لغو شد")
 
-# ---------- بقیه بخش‌های پنل مدیریت (بدون تغییر) ----------
+# ---------- بقیه بخش‌های پنل مدیریت (با اصلاح admin_users) ----------
 @bot.callback_query_handler(func=lambda call: call.data == "admin_stats")
 def admin_stats(call):
     user_id = call.from_user.id
@@ -1159,25 +1159,62 @@ def admin_stats(call):
     edit_message_text_safe(call.message.chat.id, call.message.message_id, text, parse_mode='Markdown')
     bot.answer_callback_query(call.id)
 
+# ========== اصلاح تابع admin_users برای نمایش صحیح لیست کاربران ==========
 @bot.callback_query_handler(func=lambda call: call.data == "admin_users")
 def admin_users(call):
     user_id = call.from_user.id
     if user_id not in ADMIN_IDS:
         bot.answer_callback_query(call.id, "❌ شما دسترسی ندارید!", show_alert=True)
         return
-    if DATABASE_URL:
-        c.execute("SELECT telegram_id, user_name, link_code FROM users ORDER BY telegram_id DESC LIMIT 200")
-    else:
-        c.execute("SELECT telegram_id, user_name, link_code FROM users ORDER BY telegram_id DESC LIMIT 200")
-    users = c.fetchall()
-    if not users:
-        text = "📭 هیچ کاربری در دیتابیس یافت نشد."
-    else:
-        text = "👥 **لیست ۳۰ کاربر اخیر:**\n\n"
+    
+    try:
+        # دریافت ۲۰۰ کاربر آخر
+        if DATABASE_URL:
+            c.execute("SELECT telegram_id, user_name, link_code FROM users ORDER BY telegram_id DESC LIMIT 200")
+        else:
+            c.execute("SELECT telegram_id, user_name, link_code FROM users ORDER BY telegram_id DESC LIMIT 200")
+        
+        users = c.fetchall()
+        
+        if not users:
+            text = "📭 هیچ کاربری در دیتابیس یافت نشد."
+            edit_message_text_safe(call.message.chat.id, call.message.message_id, text, parse_mode='Markdown')
+            bot.answer_callback_query(call.id)
+            return
+        
+        # شمارش کل کاربران
+        c.execute("SELECT COUNT(*) FROM users")
+        total_users = c.fetchone()[0]
+        
+        # ساخت لیست
+        text = f"👥 **لیست {len(users)} کاربر از {total_users} کاربر کل (۲۰۰ کاربر آخر):**\n\n"
         for uid, name, code in users:
             display_name = name if name else "بدون نام"
             text += f"• {display_name} (ID: `{uid}`)\n"
-    edit_message_text_safe(call.message.chat.id, call.message.message_id, text, parse_mode='Markdown')
+        
+        # اگر متن طولانی شد، به چند بخش تقسیم کن
+        if len(text) > 4000:
+            # حذف پیام قبلی
+            try:
+                delete_message_safe(call.message.chat.id, call.message.message_id)
+            except:
+                pass
+            # ارسال به چند بخش
+            parts = [text[i:i+4000] for i in range(0, len(text), 4000)]
+            for part in parts:
+                send_message_safe(call.message.chat.id, part, parse_mode='Markdown')
+        else:
+            # ویرایش پیام قبلی
+            edit_message_text_safe(call.message.chat.id, call.message.message_id, text, parse_mode='Markdown')
+        
+    except Exception as e:
+        error_text = f"❌ خطا در دریافت لیست کاربران:\n\n`{str(e)}`"
+        try:
+            edit_message_text_safe(call.message.chat.id, call.message.message_id, error_text, parse_mode='Markdown')
+        except:
+            send_message_safe(call.message.chat.id, error_text, parse_mode='Markdown')
+        logger.error(f"Error in admin_users: {e}")
+    
     bot.answer_callback_query(call.id)
 
 @bot.callback_query_handler(func=lambda call: call.data == "admin_reports")
