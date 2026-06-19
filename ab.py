@@ -84,6 +84,13 @@ if DATABASE_URL:
         trapped_at TEXT
     )""")
     
+    # جدول محدودیت پیام ناشناس
+    c.execute("""CREATE TABLE IF NOT EXISTS anonymous_limits (
+        user_id BIGINT PRIMARY KEY,
+        date TEXT,
+        count INTEGER DEFAULT 0
+    )""")
+    
     conn.commit()
     logger.info("Connected to PostgreSQL successfully!")
     
@@ -134,6 +141,13 @@ else:
         clicker_name TEXT,
         clicker_username TEXT,
         trapped_at TEXT
+    )""")
+    
+    # جدول محدودیت پیام ناشناس
+    c.execute("""CREATE TABLE IF NOT EXISTS anonymous_limits (
+        user_id INTEGER PRIMARY KEY,
+        date TEXT,
+        count INTEGER DEFAULT 0
     )""")
     
     conn.commit()
@@ -197,6 +211,47 @@ def edit_message_reply_markup_safe(chat_id, message_id, reply_markup):
     except Exception as e:
         logger.error(f"Error editing reply markup: {e}")
         return None
+
+# ========== تابع محدودیت پیام ناشناس ==========
+MAX_ANONYMOUS_PER_DAY = 10
+
+def can_send_anonymous(user_id):
+    """بررسی می‌کند که کاربر امروز مجاز به ارسال پیام ناشناس است یا خیر"""
+    today = datetime.now().strftime('%Y-%m-%d')
+    if DATABASE_URL:
+        c.execute("SELECT date, count FROM anonymous_limits WHERE user_id = %s", (user_id,))
+    else:
+        c.execute("SELECT date, count FROM anonymous_limits WHERE user_id = ?", (user_id,))
+    row = c.fetchone()
+    
+    if row:
+        date, count = row
+        if date == today:
+            if count >= MAX_ANONYMOUS_PER_DAY:
+                return False, count
+            # به‌روزرسانی تعداد
+            if DATABASE_URL:
+                c.execute("UPDATE anonymous_limits SET count = count + 1 WHERE user_id = %s", (user_id,))
+            else:
+                c.execute("UPDATE anonymous_limits SET count = count + 1 WHERE user_id = ?", (user_id,))
+            conn.commit()
+            return True, count + 1
+        else:
+            # روز جدید است
+            if DATABASE_URL:
+                c.execute("UPDATE anonymous_limits SET date = %s, count = 1 WHERE user_id = %s", (today, user_id))
+            else:
+                c.execute("UPDATE anonymous_limits SET date = ?, count = 1 WHERE user_id = ?", (today, user_id))
+            conn.commit()
+            return True, 1
+    else:
+        # اولین پیام امروز
+        if DATABASE_URL:
+            c.execute("INSERT INTO anonymous_limits (user_id, date, count) VALUES (%s, %s, 1)", (user_id, today))
+        else:
+            c.execute("INSERT INTO anonymous_limits (user_id, date, count) VALUES (?, ?, 1)", (user_id, today))
+        conn.commit()
+        return True, 1
 
 # ========== توابع کمکی برای آمار ==========
 def get_total_users():
@@ -568,7 +623,7 @@ def handle_help(message):
     hide_keyboard = ReplyKeyboardRemove()
     send_message_safe(user_id, help_text, reply_markup=keyboard, parse_mode='Markdown')
 
-# ========== پیام ناشناس رایگان (با قابلیت پاسخ) ==========
+# ========== پیام ناشناس رایگان (با قابلیت پاسخ و محدودیت ۱۰ عدد در روز) ==========
 @bot.callback_query_handler(func=lambda call: call.data.startswith("anon_"))
 def anonymous_message(call):
     _, clicker_id, owner_id = call.data.split("_")
@@ -577,6 +632,13 @@ def anonymous_message(call):
     if user_id != owner_id:
         bot.answer_callback_query(call.id, "این دکمه فقط برای صاحب لینک قابل استفاده است!", show_alert=True)
         return
+    
+    # بررسی محدودیت پیام ناشناس برای کاربر
+    allowed, count = can_send_anonymous(user_id)
+    if not allowed:
+        bot.answer_callback_query(call.id, f"❌ شما امروز {MAX_ANONYMOUS_PER_DAY} پیام ناشناس ارسال کرده‌اید. فردا دوباره امتحان کنید.", show_alert=True)
+        return
+    
     safe_dict_add(anonymous_temp, user_id, clicker_id)
     try:
         edit_message_reply_markup_safe(call.message.chat.id, call.message.message_id, reply_markup=None)
@@ -584,7 +646,7 @@ def anonymous_message(call):
         pass
     cancel_keyboard = InlineKeyboardMarkup()
     cancel_keyboard.add(InlineKeyboardButton("❌ انصراف", callback_data="cancel_anonymous"))
-    send_message_safe(user_id, "💬 **ارسال پیام ناشناس**\n\nلطفاً متن پیام خود را ارسال کنید.\nاین پیام **به صورت ناشناس** برای کاربر فضول فرستاده خواهد شد.\n\n⚠️ توجه: نام و اطلاعات شما فاش نمی‌شود.",
+    send_message_safe(user_id, f"💬 **ارسال پیام ناشناس** (امروز {count} از {MAX_ANONYMOUS_PER_DAY} ارسال)\n\nلطفاً متن پیام خود را ارسال کنید.\nاین پیام **به صورت ناشناس** برای کاربر فضول فرستاده خواهد شد.\n\n⚠️ توجه: نام و اطلاعات شما فاش نمی‌شود.",
                      reply_markup=cancel_keyboard, parse_mode='Markdown')
     bot.register_next_step_handler_by_chat_id(user_id, receive_anonymous_message, clicker_id, owner_id)
     bot.answer_callback_query(call.id)
