@@ -1166,9 +1166,9 @@ def admin_users(call):
         bot.answer_callback_query(call.id, "❌ شما دسترسی ندارید!", show_alert=True)
         return
     if DATABASE_URL:
-        c.execute("SELECT telegram_id, user_name, link_code FROM users ORDER BY telegram_id DESC LIMIT 30")
+        c.execute("SELECT telegram_id, user_name, link_code FROM users ORDER BY telegram_id DESC LIMIT 200")
     else:
-        c.execute("SELECT telegram_id, user_name, link_code FROM users ORDER BY telegram_id DESC LIMIT 30")
+        c.execute("SELECT telegram_id, user_name, link_code FROM users ORDER BY telegram_id DESC LIMIT 200")
     users = c.fetchall()
     if not users:
         text = "📭 هیچ کاربری در دیتابیس یافت نشد."
