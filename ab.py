@@ -1041,7 +1041,7 @@ def get_my_link_from_ad(call):
         pass
     main_panel(user_id)
 
-# ========== ۴ دکمه اصلی (بیوگرافی، پیوی، عکس) با مدیریت خطا ==========
+# ========== ۴ دکمه اصلی (بیوگرافی، پیوی، عکس) با مدیریت خطا و پاسخ کالبک ==========
 @bot.callback_query_handler(func=lambda call: call.data.startswith("bio_"))
 def show_bio(call):
     try:
@@ -1070,6 +1070,7 @@ def show_bio(call):
     except Exception as e:
         logger.error(f"Error in show_bio: {e}")
         bot.answer_callback_query(call.id, f"❌ خطا: {str(e)}", show_alert=True)
+        send_message_safe(call.message.chat.id, f"❌ خطا در دریافت بیوگرافی: {str(e)}")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("pv_"))
 def send_pv(call):
@@ -1103,6 +1104,7 @@ def send_pv(call):
     except Exception as e:
         logger.error(f"Error in send_pv: {e}")
         bot.answer_callback_query(call.id, f"❌ خطا: {str(e)}", show_alert=True)
+        send_message_safe(call.message.chat.id, f"❌ خطا در دریافت آیدی: {str(e)}")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("photo_"))
 def show_photo(call):
@@ -1130,6 +1132,7 @@ def show_photo(call):
     except Exception as e:
         logger.error(f"Error in show_photo: {e}")
         bot.answer_callback_query(call.id, f"❌ خطا: {str(e)}", show_alert=True)
+        send_message_safe(call.message.chat.id, f"❌ خطا در دریافت عکس: {str(e)}")
 
 # ========== دکمه‌های تبلیغاتی (ad) ==========
 @bot.callback_query_handler(func=lambda call: call.data.startswith("ad_"))
