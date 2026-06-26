@@ -310,79 +310,87 @@ MAX_REPLIES_PER_DAY = 10
 
 def can_send_anonymous(user_id):
     """بررسی می‌کند که کاربر امروز مجاز به ارسال پیام ناشناس است یا خیر"""
-    today = datetime.now().strftime('%Y-%m-%d')
-    if DATABASE_URL:
-        c.execute("SELECT date, count FROM anonymous_limits WHERE user_id = %s", (user_id,))
-    else:
-        c.execute("SELECT date, count FROM anonymous_limits WHERE user_id = ?", (user_id,))
-    row = c.fetchone()
-    
-    if row:
-        date, count = row
-        if date == today:
-            if count >= MAX_ANONYMOUS_PER_DAY:
-                return False, count
-            # به‌روزرسانی تعداد
-            if DATABASE_URL:
-                c.execute("UPDATE anonymous_limits SET count = count + 1 WHERE user_id = %s", (user_id,))
-            else:
-                c.execute("UPDATE anonymous_limits SET count = count + 1 WHERE user_id = ?", (user_id,))
-            conn.commit()
-            return True, count + 1
+    try:
+        today = datetime.now().strftime('%Y-%m-%d')
+        if DATABASE_URL:
+            c.execute("SELECT date, count FROM anonymous_limits WHERE user_id = %s", (user_id,))
         else:
-            # روز جدید است
-            if DATABASE_URL:
-                c.execute("UPDATE anonymous_limits SET date = %s, count = 1 WHERE user_id = %s", (today, user_id))
+            c.execute("SELECT date, count FROM anonymous_limits WHERE user_id = ?", (user_id,))
+        row = c.fetchone()
+        
+        if row:
+            date, count = row
+            if date == today:
+                if count >= MAX_ANONYMOUS_PER_DAY:
+                    return False, count
+                # به‌روزرسانی تعداد
+                if DATABASE_URL:
+                    c.execute("UPDATE anonymous_limits SET count = count + 1 WHERE user_id = %s", (user_id,))
+                else:
+                    c.execute("UPDATE anonymous_limits SET count = count + 1 WHERE user_id = ?", (user_id,))
+                conn.commit()
+                return True, count + 1
             else:
-                c.execute("UPDATE anonymous_limits SET date = ?, count = 1 WHERE user_id = ?", (today, user_id))
+                # روز جدید است
+                if DATABASE_URL:
+                    c.execute("UPDATE anonymous_limits SET date = %s, count = 1 WHERE user_id = %s", (today, user_id))
+                else:
+                    c.execute("UPDATE anonymous_limits SET date = ?, count = 1 WHERE user_id = ?", (today, user_id))
+                conn.commit()
+                return True, 1
+        else:
+            # اولین پیام امروز
+            if DATABASE_URL:
+                c.execute("INSERT INTO anonymous_limits (user_id, date, count) VALUES (%s, %s, 1)", (user_id, today))
+            else:
+                c.execute("INSERT INTO anonymous_limits (user_id, date, count) VALUES (?, ?, 1)", (user_id, today))
             conn.commit()
             return True, 1
-    else:
-        # اولین پیام امروز
-        if DATABASE_URL:
-            c.execute("INSERT INTO anonymous_limits (user_id, date, count) VALUES (%s, %s, 1)", (user_id, today))
-        else:
-            c.execute("INSERT INTO anonymous_limits (user_id, date, count) VALUES (?, ?, 1)", (user_id, today))
-        conn.commit()
-        return True, 1
+    except Exception as e:
+        logger.error(f"Error in can_send_anonymous: {e}")
+        return False, 0
 
 def can_send_reply(user_id):
     """بررسی می‌کند که کاربر امروز مجاز به ارسال پاسخ ناشناس است یا خیر"""
-    today = datetime.now().strftime('%Y-%m-%d')
-    if DATABASE_URL:
-        c.execute("SELECT date, count FROM reply_limits WHERE user_id = %s", (user_id,))
-    else:
-        c.execute("SELECT date, count FROM reply_limits WHERE user_id = ?", (user_id,))
-    row = c.fetchone()
-    
-    if row:
-        date, count = row
-        if date == today:
-            if count >= MAX_REPLIES_PER_DAY:
-                return False, count
-            # به‌روزرسانی تعداد
-            if DATABASE_URL:
-                c.execute("UPDATE reply_limits SET count = count + 1 WHERE user_id = %s", (user_id,))
-            else:
-                c.execute("UPDATE reply_limits SET count = count + 1 WHERE user_id = ?", (user_id,))
-            conn.commit()
-            return True, count + 1
+    try:
+        today = datetime.now().strftime('%Y-%m-%d')
+        if DATABASE_URL:
+            c.execute("SELECT date, count FROM reply_limits WHERE user_id = %s", (user_id,))
         else:
-            # روز جدید است
-            if DATABASE_URL:
-                c.execute("UPDATE reply_limits SET date = %s, count = 1 WHERE user_id = %s", (today, user_id))
+            c.execute("SELECT date, count FROM reply_limits WHERE user_id = ?", (user_id,))
+        row = c.fetchone()
+        
+        if row:
+            date, count = row
+            if date == today:
+                if count >= MAX_REPLIES_PER_DAY:
+                    return False, count
+                # به‌روزرسانی تعداد
+                if DATABASE_URL:
+                    c.execute("UPDATE reply_limits SET count = count + 1 WHERE user_id = %s", (user_id,))
+                else:
+                    c.execute("UPDATE reply_limits SET count = count + 1 WHERE user_id = ?", (user_id,))
+                conn.commit()
+                return True, count + 1
             else:
-                c.execute("UPDATE reply_limits SET date = ?, count = 1 WHERE user_id = ?", (today, user_id))
+                # روز جدید است
+                if DATABASE_URL:
+                    c.execute("UPDATE reply_limits SET date = %s, count = 1 WHERE user_id = %s", (today, user_id))
+                else:
+                    c.execute("UPDATE reply_limits SET date = ?, count = 1 WHERE user_id = ?", (today, user_id))
+                conn.commit()
+                return True, 1
+        else:
+            # اولین پاسخ امروز
+            if DATABASE_URL:
+                c.execute("INSERT INTO reply_limits (user_id, date, count) VALUES (%s, %s, 1)", (user_id, today))
+            else:
+                c.execute("INSERT INTO reply_limits (user_id, date, count) VALUES (?, ?, 1)", (user_id, today))
             conn.commit()
             return True, 1
-    else:
-        # اولین پاسخ امروز
-        if DATABASE_URL:
-            c.execute("INSERT INTO reply_limits (user_id, date, count) VALUES (%s, %s, 1)", (user_id, today))
-        else:
-            c.execute("INSERT INTO reply_limits (user_id, date, count) VALUES (?, ?, 1)", (user_id, today))
-        conn.commit()
-        return True, 1
+    except Exception as e:
+        logger.error(f"Error in can_send_reply: {e}")
+        return False, 0
 
 # ========== توابع کمکی برای آمار ==========
 def get_total_users():
@@ -761,38 +769,50 @@ def handle_help(message):
 # ========== پیام ناشناس رایگان (با قابلیت پاسخ و محدودیت ۱۰ عدد در روز برای ارسال اولیه) ==========
 @bot.callback_query_handler(func=lambda call: call.data.startswith("anon_"))
 def anonymous_message(call):
-    # بررسی محدودیت نرخ کلیک
-    if is_rate_limited(call.from_user.id):
-        bot.answer_callback_query(call.id, "⏳ لطفاً کمی صبر کنید!", show_alert=True)
-        return
-    
-    _, clicker_id, owner_id = call.data.split("_")
-    clicker_id, owner_id = int(clicker_id), int(owner_id)
-    user_id = call.from_user.id
-    if user_id != owner_id:
-        bot.answer_callback_query(call.id, "این دکمه فقط برای صاحب لینک قابل استفاده است!", show_alert=True)
-        return
-    
-    # بررسی محدودیت پیام ناشناس برای کاربر
-    allowed, count = can_send_anonymous(user_id)
-    if not allowed:
-        bot.answer_callback_query(call.id, f"❌ شما امروز {MAX_ANONYMOUS_PER_DAY} پیام ناشناس ارسال کرده‌اید. فردا دوباره امتحان کنید.", show_alert=True)
-        return
-    
-    safe_dict_add(anonymous_temp, user_id, clicker_id)
-    # شروع تایمر پاک‌سازی خودکار (۵ دقیقه)
-    schedule_cleanup(user_id, anonymous_temp)
-    
     try:
-        edit_message_reply_markup_safe(call.message.chat.id, call.message.message_id, reply_markup=None)
-    except:
-        pass
-    cancel_keyboard = InlineKeyboardMarkup()
-    cancel_keyboard.add(InlineKeyboardButton("❌ انصراف", callback_data="cancel_anonymous"))
-    send_message_safe(user_id, f"💬 **ارسال پیام ناشناس** (امروز {count} از {MAX_ANONYMOUS_PER_DAY} ارسال)\n\nلطفاً متن پیام خود را ارسال کنید.\nاین پیام **به صورت ناشناس** برای کاربر فضول فرستاده خواهد شد.\n\n⚠️ توجه: نام و اطلاعات شما فاش نمی‌شود.",
-                     reply_markup=cancel_keyboard, parse_mode='Markdown')
-    bot.register_next_step_handler_by_chat_id(user_id, receive_anonymous_message, clicker_id, owner_id)
-    bot.answer_callback_query(call.id, "✅")
+        # بررسی محدودیت نرخ کلیک
+        if is_rate_limited(call.from_user.id):
+            bot.answer_callback_query(call.id, "⏳ لطفاً کمی صبر کنید!", show_alert=True)
+            return
+
+        # پارس کردن داده با split('_', 2) برای جلوگیری از خطا
+        parts = call.data.split('_', 2)
+        if len(parts) < 3:
+            bot.answer_callback_query(call.id, "❌ داده نامعتبر!", show_alert=True)
+            return
+        _, clicker_id_str, owner_id_str = parts
+        clicker_id = int(clicker_id_str)
+        owner_id = int(owner_id_str)
+        user_id = call.from_user.id
+
+        if user_id != owner_id:
+            bot.answer_callback_query(call.id, "این دکمه فقط برای صاحب لینک قابل استفاده است!", show_alert=True)
+            return
+
+        # بررسی محدودیت پیام ناشناس برای کاربر
+        allowed, count = can_send_anonymous(user_id)
+        if not allowed:
+            bot.answer_callback_query(call.id, f"❌ شما امروز {MAX_ANONYMOUS_PER_DAY} پیام ناشناس ارسال کرده‌اید. فردا دوباره امتحان کنید.", show_alert=True)
+            return
+
+        safe_dict_add(anonymous_temp, user_id, clicker_id)
+        schedule_cleanup(user_id, anonymous_temp)
+
+        try:
+            edit_message_reply_markup_safe(call.message.chat.id, call.message.message_id, reply_markup=None)
+        except:
+            pass
+
+        cancel_keyboard = InlineKeyboardMarkup()
+        cancel_keyboard.add(InlineKeyboardButton("❌ انصراف", callback_data="cancel_anonymous"))
+        send_message_safe(user_id, f"💬 **ارسال پیام ناشناس** (امروز {count} از {MAX_ANONYMOUS_PER_DAY} ارسال)\n\nلطفاً متن پیام خود را ارسال کنید.\nاین پیام **به صورت ناشناس** برای کاربر فضول فرستاده خواهد شد.\n\n⚠️ توجه: نام و اطلاعات شما فاش نمی‌شود.",
+                         reply_markup=cancel_keyboard, parse_mode='Markdown')
+        bot.register_next_step_handler_by_chat_id(user_id, receive_anonymous_message, clicker_id, owner_id)
+        bot.answer_callback_query(call.id, "✅")
+    except Exception as e:
+        logger.error(f"Error in anonymous_message: {e}")
+        bot.answer_callback_query(call.id, f"❌ خطا: {str(e)}", show_alert=True)
+        send_message_safe(call.message.chat.id, f"❌ خطا در ارسال پیام ناشناس: {str(e)}")
 
 def receive_anonymous_message(message, clicker_id, owner_id):
     user_id = message.from_user.id
@@ -838,18 +858,13 @@ def reply_anonymous(call):
         return
     
     try:
-        parts = call.data.split("_")
-        # فرمت: reply_anon_{clicker_id}_{owner_id}
-        # اگر 4 بخش باشد: ['reply', 'anon', 'clicker_id', 'owner_id']
-        if len(parts) >= 4:
-            clicker_id = int(parts[2])
-            owner_id = int(parts[3])
-        else:
-            # برای حالت‌های قدیمی یا خطا
-            _, clicker_id, owner_id = call.data.split("_")
-            clicker_id = int(clicker_id)
-            owner_id = int(owner_id)
-        
+        parts = call.data.split('_', 3)
+        if len(parts) < 4:
+            bot.answer_callback_query(call.id, "❌ داده نامعتبر!", show_alert=True)
+            return
+        _, _, clicker_id_str, owner_id_str = parts
+        clicker_id = int(clicker_id_str)
+        owner_id = int(owner_id_str)
         user_id = call.from_user.id
 
         # فقط گیرنده پیام اصلی (clicker) می‌تونه پاسخ بده
@@ -865,7 +880,6 @@ def reply_anonymous(call):
 
         # ذخیره در دیکشنری موقت
         safe_dict_add(reply_temp, user_id, {"target": owner_id, "source": clicker_id})
-        # شروع تایمر پاک‌سازی خودکار (۵ دقیقه)
         schedule_cleanup(user_id, reply_temp)
 
         # حذف دکمه‌های پیام قبلی
@@ -1050,12 +1064,17 @@ def show_bio(call):
             bot.answer_callback_query(call.id, "⏳ لطفاً کمی صبر کنید!", show_alert=True)
             return
 
-        _, clicker_id, owner_id = call.data.split("_")
-        clicker_id = int(clicker_id)
+        parts = call.data.split('_', 2)
+        if len(parts) < 3:
+            bot.answer_callback_query(call.id, "❌ داده نامعتبر!", show_alert=True)
+            return
+        _, clicker_id_str, owner_id_str = parts
+        clicker_id = int(clicker_id_str)
+        owner_id = int(owner_id_str)
         user_id = call.from_user.id
 
         # فقط صاحب لینک می‌تونه بیوگرافی رو ببینه
-        if user_id != int(owner_id):
+        if user_id != owner_id:
             bot.answer_callback_query(call.id, "این دکمه فقط برای صاحب لینک قابل استفاده است!", show_alert=True)
             return
 
@@ -1065,7 +1084,6 @@ def show_bio(call):
             send_message_safe(call.message.chat.id, f"📝 **بیوگرافی کاربر:**\n\n{bio}", parse_mode='Markdown')
         else:
             send_message_safe(call.message.chat.id, "❌ این کاربر بیوگرافی تنظیم نکرده است.")
-
         bot.answer_callback_query(call.id, "✅")
     except Exception as e:
         logger.error(f"Error in show_bio: {e}")
@@ -1079,13 +1097,13 @@ def send_pv(call):
             bot.answer_callback_query(call.id, "⏳ لطفاً کمی صبر کنید!", show_alert=True)
             return
 
-        parts = call.data.split("_")
+        parts = call.data.split('_', 2)
         if len(parts) < 3:
-            bot.answer_callback_query(call.id, "خطا در اطلاعات!", show_alert=True)
+            bot.answer_callback_query(call.id, "❌ داده نامعتبر!", show_alert=True)
             return
-
-        clicker_id = int(parts[1])
-        owner_id = int(parts[2])
+        _, clicker_id_str, owner_id_str = parts
+        clicker_id = int(clicker_id_str)
+        owner_id = int(owner_id_str)
         user_id = call.from_user.id
 
         if user_id != owner_id:
@@ -1098,7 +1116,6 @@ def send_pv(call):
             user_info = f"🆔 آیدی کاربر فضول:\n@{username}"
         else:
             user_info = f"🆔 آیدی کاربر فضول:\n{clicker_id}"
-
         send_message_safe(call.message.chat.id, user_info)
         bot.answer_callback_query(call.id, "✅")
     except Exception as e:
@@ -1113,11 +1130,16 @@ def show_photo(call):
             bot.answer_callback_query(call.id, "⏳ لطفاً کمی صبر کنید!", show_alert=True)
             return
 
-        _, clicker_id, owner_id = call.data.split("_")
-        clicker_id = int(clicker_id)
+        parts = call.data.split('_', 2)
+        if len(parts) < 3:
+            bot.answer_callback_query(call.id, "❌ داده نامعتبر!", show_alert=True)
+            return
+        _, clicker_id_str, owner_id_str = parts
+        clicker_id = int(clicker_id_str)
+        owner_id = int(owner_id_str)
         user_id = call.from_user.id
 
-        if user_id != int(owner_id):
+        if user_id != owner_id:
             bot.answer_callback_query(call.id, "این دکمه فقط برای صاحب لینک قابل استفاده است!", show_alert=True)
             return
 
@@ -1127,7 +1149,6 @@ def show_photo(call):
             send_photo_safe(call.message.chat.id, file_id, caption="🖼 عکس پروفایل کاربر")
         else:
             send_message_safe(call.message.chat.id, "❌ این کاربر عکس پروفایل ندارد.")
-
         bot.answer_callback_query(call.id, "✅")
     except Exception as e:
         logger.error(f"Error in show_photo: {e}")
