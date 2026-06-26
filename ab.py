@@ -210,6 +210,17 @@ anonymous_temp = {}
 reply_temp = {}  # دیکشنری موقت برای پاسخ ناشناس
 ad_temp = {}  # دیکشنری موقت برای ذخیره اسم و لینک تبلیغات
 
+# ========== پاک‌سازی خودکار دیکشنری‌های موقت ==========
+def schedule_cleanup(user_id, dictionary):
+    """حذف آیتم از دیکشنری پس از ۵ دقیقه"""
+    def cleanup():
+        if user_id in dictionary:
+            del dictionary[user_id]
+            logger.info(f"Cleaned up expired entry for user {user_id}")
+    timer = threading.Timer(300, cleanup)  # 300 ثانیه = ۵ دقیقه
+    timer.daemon = True  # تا با خروج برنامه بسته شود
+    timer.start()
+
 # توابع کمکی برای ارسال با تاخیر (Rate Limiting)
 def send_message_safe(chat_id, text, **kwargs):
     time.sleep(RATE_LIMIT_DELAY)
@@ -769,6 +780,9 @@ def anonymous_message(call):
         return
     
     safe_dict_add(anonymous_temp, user_id, clicker_id)
+    # شروع تایمر پاک‌سازی خودکار (۵ دقیقه)
+    schedule_cleanup(user_id, anonymous_temp)
+    
     try:
         edit_message_reply_markup_safe(call.message.chat.id, call.message.message_id, reply_markup=None)
     except:
@@ -778,7 +792,7 @@ def anonymous_message(call):
     send_message_safe(user_id, f"💬 **ارسال پیام ناشناس** (امروز {count} از {MAX_ANONYMOUS_PER_DAY} ارسال)\n\nلطفاً متن پیام خود را ارسال کنید.\nاین پیام **به صورت ناشناس** برای کاربر فضول فرستاده خواهد شد.\n\n⚠️ توجه: نام و اطلاعات شما فاش نمی‌شود.",
                      reply_markup=cancel_keyboard, parse_mode='Markdown')
     bot.register_next_step_handler_by_chat_id(user_id, receive_anonymous_message, clicker_id, owner_id)
-    bot.answer_callback_query(call.id)
+    bot.answer_callback_query(call.id, "✅")
 
 def receive_anonymous_message(message, clicker_id, owner_id):
     user_id = message.from_user.id
@@ -851,6 +865,8 @@ def reply_anonymous(call):
 
         # ذخیره در دیکشنری موقت
         safe_dict_add(reply_temp, user_id, {"target": owner_id, "source": clicker_id})
+        # شروع تایمر پاک‌سازی خودکار (۵ دقیقه)
+        schedule_cleanup(user_id, reply_temp)
 
         # حذف دکمه‌های پیام قبلی
         try:
@@ -1025,53 +1041,95 @@ def get_my_link_from_ad(call):
         pass
     main_panel(user_id)
 
-# ========== ۴ دکمه اصلی (بیوگرافی، پیوی، عکس) بدون بررسی اشتراک ==========
+# ========== ۴ دکمه اصلی (بیوگرافی، پیوی، عکس) با مدیریت خطا ==========
 @bot.callback_query_handler(func=lambda call: call.data.startswith("bio_"))
 def show_bio(call):
-    _, clicker_id, owner_id = call.data.split("_")
-    bot.answer_callback_query(call.id)
     try:
-        chat = bot.get_chat(int(clicker_id))
+        # بررسی محدودیت نرخ کلیک
+        if is_rate_limited(call.from_user.id):
+            bot.answer_callback_query(call.id, "⏳ لطفاً کمی صبر کنید!", show_alert=True)
+            return
+
+        _, clicker_id, owner_id = call.data.split("_")
+        clicker_id = int(clicker_id)
+        user_id = call.from_user.id
+
+        # فقط صاحب لینک می‌تونه بیوگرافی رو ببینه
+        if user_id != int(owner_id):
+            bot.answer_callback_query(call.id, "این دکمه فقط برای صاحب لینک قابل استفاده است!", show_alert=True)
+            return
+
+        chat = bot.get_chat(clicker_id)
         bio = getattr(chat, 'bio', None)
         if bio:
             send_message_safe(call.message.chat.id, f"📝 **بیوگرافی کاربر:**\n\n{bio}", parse_mode='Markdown')
         else:
             send_message_safe(call.message.chat.id, "❌ این کاربر بیوگرافی تنظیم نکرده است.")
-    except:
-        send_message_safe(call.message.chat.id, "❌ امکان نمایش بیوگرافی وجود ندارد.")
+
+        bot.answer_callback_query(call.id, "✅")
+    except Exception as e:
+        logger.error(f"Error in show_bio: {e}")
+        bot.answer_callback_query(call.id, f"❌ خطا: {str(e)}", show_alert=True)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("pv_"))
 def send_pv(call):
-    parts = call.data.split("_")
-    if len(parts) < 3:
-        bot.answer_callback_query(call.id, "خطا در اطلاعات!", show_alert=True)
-        return
-    clicker_id = int(parts[1])
-    bot.answer_callback_query(call.id)
     try:
+        if is_rate_limited(call.from_user.id):
+            bot.answer_callback_query(call.id, "⏳ لطفاً کمی صبر کنید!", show_alert=True)
+            return
+
+        parts = call.data.split("_")
+        if len(parts) < 3:
+            bot.answer_callback_query(call.id, "خطا در اطلاعات!", show_alert=True)
+            return
+
+        clicker_id = int(parts[1])
+        owner_id = int(parts[2])
+        user_id = call.from_user.id
+
+        if user_id != owner_id:
+            bot.answer_callback_query(call.id, "این دکمه فقط برای صاحب لینک قابل استفاده است!", show_alert=True)
+            return
+
         chat = bot.get_chat(clicker_id)
         username = chat.username
         if username:
             user_info = f"🆔 آیدی کاربر فضول:\n@{username}"
         else:
             user_info = f"🆔 آیدی کاربر فضول:\n{clicker_id}"
+
         send_message_safe(call.message.chat.id, user_info)
+        bot.answer_callback_query(call.id, "✅")
     except Exception as e:
-        send_message_safe(call.message.chat.id, f"❌ امکان دریافت آیدی کاربر وجود ندارد.\nخطا: {e}")
+        logger.error(f"Error in send_pv: {e}")
+        bot.answer_callback_query(call.id, f"❌ خطا: {str(e)}", show_alert=True)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("photo_"))
 def show_photo(call):
-    _, clicker_id, owner_id = call.data.split("_")
-    bot.answer_callback_query(call.id)
     try:
-        photos = bot.get_user_profile_photos(int(clicker_id), limit=1)
+        if is_rate_limited(call.from_user.id):
+            bot.answer_callback_query(call.id, "⏳ لطفاً کمی صبر کنید!", show_alert=True)
+            return
+
+        _, clicker_id, owner_id = call.data.split("_")
+        clicker_id = int(clicker_id)
+        user_id = call.from_user.id
+
+        if user_id != int(owner_id):
+            bot.answer_callback_query(call.id, "این دکمه فقط برای صاحب لینک قابل استفاده است!", show_alert=True)
+            return
+
+        photos = bot.get_user_profile_photos(clicker_id, limit=1)
         if photos.total_count > 0:
             file_id = photos.photos[0][-1].file_id
             send_photo_safe(call.message.chat.id, file_id, caption="🖼 عکس پروفایل کاربر")
         else:
             send_message_safe(call.message.chat.id, "❌ این کاربر عکس پروفایل ندارد.")
-    except:
-        send_message_safe(call.message.chat.id, "❌ امکان نمایش عکس وجود ندارد.")
+
+        bot.answer_callback_query(call.id, "✅")
+    except Exception as e:
+        logger.error(f"Error in show_photo: {e}")
+        bot.answer_callback_query(call.id, f"❌ خطا: {str(e)}", show_alert=True)
 
 # ========== دکمه‌های تبلیغاتی (ad) ==========
 @bot.callback_query_handler(func=lambda call: call.data.startswith("ad_"))
@@ -1120,7 +1178,7 @@ def admin_panel(message):
         InlineKeyboardButton("🚫 کاربران بلاک‌کننده", callback_data="admin_blocked"),
         InlineKeyboardButton("📢 تبلیغات", callback_data="admin_advertise"),
         InlineKeyboardButton("📢 ارسال به همه کاربران", callback_data="admin_broadcast"),
-  
+        # InlineKeyboardButton("🗑 پاک کردن دیتابیس", callback_data="admin_clear"),
         InlineKeyboardButton("🔙 بستن پنل", callback_data="admin_close")
     )
     
