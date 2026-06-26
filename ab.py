@@ -195,6 +195,31 @@ else:
     def get_lastrowid():
         return c.lastrowid
 
+# ========== مدیریت مجدد اتصال دیتابیس ==========
+def ensure_db_connection():
+    """بررسی و بازیابی اتصال دیتابیس"""
+    global conn, c
+    try:
+        c.execute("SELECT 1")
+        c.fetchone()
+        return True
+    except Exception as e:
+        logger.warning(f"Database connection lost: {e}. Reconnecting...")
+        try:
+            if DATABASE_URL:
+                conn = psycopg2.connect(DATABASE_URL, sslmode='require')
+                c = conn.cursor()
+                logger.info("Database reconnected successfully!")
+                return True
+            else:
+                conn = sqlite3.connect("tracker.db", check_same_thread=False)
+                c = conn.cursor()
+                logger.info("SQLite reconnected successfully!")
+                return True
+        except Exception as reconnect_error:
+            logger.error(f"Failed to reconnect to database: {reconnect_error}")
+            return False
+
 # محدودیت اندازه دیکشنری‌های موقت
 MAX_TEMP_SIZE = 500
 
@@ -221,44 +246,62 @@ def schedule_cleanup(user_id, dictionary):
     timer.daemon = True  # تا با خروج برنامه بسته شود
     timer.start()
 
-# توابع کمکی برای ارسال با تاخیر (Rate Limiting)
+# ========== توابع کمکی برای ارسال با تلاش مجدد ==========
 def send_message_safe(chat_id, text, **kwargs):
     time.sleep(RATE_LIMIT_DELAY)
-    try:
-        return bot.send_message(chat_id, text, **kwargs)
-    except Exception as e:
-        # بررسی خطای بلاک شدن
-        if "Forbidden: bot was blocked by the user" in str(e):
-            # ذخیره کاربر بلاک‌کننده در دیتابیس
-            try:
-                if DATABASE_URL:
-                    c.execute("INSERT INTO blocked_users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING", (chat_id,))
-                else:
-                    c.execute("INSERT OR IGNORE INTO blocked_users (user_id) VALUES (?)", (chat_id,))
-                conn.commit()
-                logger.info(f"User {chat_id} marked as blocked.")
-            except Exception as db_err:
-                logger.error(f"Error saving blocked user {chat_id}: {db_err}")
-        logger.error(f"Error sending message to {chat_id}: {e}")
-        return None
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            return bot.send_message(chat_id, text, **kwargs)
+        except Exception as e:
+            error_str = str(e)
+            if "Connection aborted" in error_str or "Connection reset" in error_str:
+                logger.warning(f"Connection error on attempt {attempt+1}: {e}")
+                time.sleep(2)
+                continue
+            elif "Forbidden: bot was blocked by the user" in error_str:
+                try:
+                    if DATABASE_URL:
+                        c.execute("INSERT INTO blocked_users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING", (chat_id,))
+                    else:
+                        c.execute("INSERT OR IGNORE INTO blocked_users (user_id) VALUES (?)", (chat_id,))
+                    conn.commit()
+                    logger.info(f"User {chat_id} marked as blocked.")
+                except Exception as db_err:
+                    logger.error(f"Error saving blocked user {chat_id}: {db_err}")
+                return None
+            else:
+                logger.error(f"Error sending message to {chat_id}: {e}")
+                return None
+    logger.error(f"Failed to send message after {max_retries} attempts")
+    return None
 
 def send_photo_safe(chat_id, photo, **kwargs):
     time.sleep(RATE_LIMIT_DELAY)
-    try:
-        return bot.send_photo(chat_id, photo, **kwargs)
-    except Exception as e:
-        if "Forbidden: bot was blocked by the user" in str(e):
-            try:
-                if DATABASE_URL:
-                    c.execute("INSERT INTO blocked_users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING", (chat_id,))
-                else:
-                    c.execute("INSERT OR IGNORE INTO blocked_users (user_id) VALUES (?)", (chat_id,))
-                conn.commit()
-                logger.info(f"User {chat_id} marked as blocked (photo).")
-            except:
-                pass
-        logger.error(f"Error sending photo to {chat_id}: {e}")
-        return None
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            return bot.send_photo(chat_id, photo, **kwargs)
+        except Exception as e:
+            error_str = str(e)
+            if "Connection aborted" in error_str or "Connection reset" in error_str:
+                logger.warning(f"Connection error on attempt {attempt+1}: {e}")
+                time.sleep(2)
+                continue
+            elif "Forbidden: bot was blocked by the user" in error_str:
+                try:
+                    if DATABASE_URL:
+                        c.execute("INSERT INTO blocked_users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING", (chat_id,))
+                    else:
+                        c.execute("INSERT OR IGNORE INTO blocked_users (user_id) VALUES (?)", (chat_id,))
+                    conn.commit()
+                except:
+                    pass
+                return None
+            else:
+                logger.error(f"Error sending photo to {chat_id}: {e}")
+                return None
+    return None
 
 def edit_message_text_safe(chat_id, message_id, text, **kwargs):
     time.sleep(RATE_LIMIT_DELAY)
@@ -272,7 +315,6 @@ def edit_message_text_safe(chat_id, message_id, text, **kwargs):
                 else:
                     c.execute("INSERT OR IGNORE INTO blocked_users (user_id) VALUES (?)", (chat_id,))
                 conn.commit()
-                logger.info(f"User {chat_id} marked as blocked (edit).")
             except:
                 pass
         logger.error(f"Error editing message {message_id} in chat {chat_id}: {e}")
@@ -290,7 +332,6 @@ def delete_message_safe(chat_id, message_id):
                 else:
                     c.execute("INSERT OR IGNORE INTO blocked_users (user_id) VALUES (?)", (chat_id,))
                 conn.commit()
-                logger.info(f"User {chat_id} marked as blocked (delete).")
             except:
                 pass
         logger.error(f"Error deleting message {message_id} in chat {chat_id}: {e}")
@@ -1055,45 +1096,86 @@ def get_my_link_from_ad(call):
         pass
     main_panel(user_id)
 
-# ========== ۴ دکمه اصلی (بیوگرافی، پیوی، عکس) با مدیریت خطا و پاسخ کالبک ==========
+# ========== ۴ دکمه اصلی (بیوگرافی، پیوی، عکس) با مدیریت کامل خطا ==========
 @bot.callback_query_handler(func=lambda call: call.data.startswith("bio_"))
 def show_bio(call):
+    user_id = call.from_user.id
+    logger.info(f"📝 bio_ callback received from user {user_id}: {call.data}")
+    
     try:
+        # اطمینان از اتصال دیتابیس
+        if not ensure_db_connection():
+            bot.answer_callback_query(call.id, "❌ خطا در اتصال به دیتابیس!", show_alert=True)
+            return
+
         # بررسی محدودیت نرخ کلیک
-        if is_rate_limited(call.from_user.id):
+        if is_rate_limited(user_id):
             bot.answer_callback_query(call.id, "⏳ لطفاً کمی صبر کنید!", show_alert=True)
             return
 
+        # پارس کردن داده
         parts = call.data.split('_', 2)
         if len(parts) < 3:
             bot.answer_callback_query(call.id, "❌ داده نامعتبر!", show_alert=True)
+            logger.error(f"Invalid bio data: {call.data}")
             return
+            
         _, clicker_id_str, owner_id_str = parts
         clicker_id = int(clicker_id_str)
         owner_id = int(owner_id_str)
-        user_id = call.from_user.id
+        
+        logger.info(f"Bio request: user={user_id}, clicker={clicker_id}, owner={owner_id}")
 
-        # فقط صاحب لینک می‌تونه بیوگرافی رو ببینه
+        # بررسی دسترسی
         if user_id != owner_id:
             bot.answer_callback_query(call.id, "این دکمه فقط برای صاحب لینک قابل استفاده است!", show_alert=True)
             return
 
-        chat = bot.get_chat(clicker_id)
-        bio = getattr(chat, 'bio', None)
-        if bio:
-            send_message_safe(call.message.chat.id, f"📝 **بیوگرافی کاربر:**\n\n{bio}", parse_mode='Markdown')
-        else:
-            send_message_safe(call.message.chat.id, "❌ این کاربر بیوگرافی تنظیم نکرده است.")
-        bot.answer_callback_query(call.id, "✅")
+        # دریافت بیوگرافی
+        try:
+            chat = bot.get_chat(clicker_id)
+            bio = getattr(chat, 'bio', None)
+            
+            if bio and bio.strip():
+                send_message_safe(call.message.chat.id, f"📝 **بیوگرافی کاربر:**\n\n{bio}", parse_mode='Markdown')
+            else:
+                send_message_safe(call.message.chat.id, "❌ این کاربر بیوگرافی تنظیم نکرده است.")
+            
+            bot.answer_callback_query(call.id, "✅ بیوگرافی ارسال شد")
+            
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Error getting bio for {clicker_id}: {error_msg}")
+            
+            if "bot was blocked" in error_msg:
+                send_message_safe(call.message.chat.id, "❌ کاربر ربات را بلاک کرده است.")
+            elif "user not found" in error_msg.lower():
+                send_message_safe(call.message.chat.id, "❌ کاربر مورد نظر یافت نشد.")
+            else:
+                send_message_safe(call.message.chat.id, f"❌ خطا در دریافت بیوگرافی: {error_msg[:100]}")
+            
+            bot.answer_callback_query(call.id, f"⚠️ خطا: {error_msg[:50]}", show_alert=True)
+            
     except Exception as e:
-        logger.error(f"Error in show_bio: {e}")
-        bot.answer_callback_query(call.id, f"❌ خطا: {str(e)}", show_alert=True)
-        send_message_safe(call.message.chat.id, f"❌ خطا در دریافت بیوگرافی: {str(e)}")
+        logger.error(f"🔥 Critical error in show_bio: {e}")
+        bot.answer_callback_query(call.id, f"❌ خطای سیستمی: {str(e)[:50]}", show_alert=True)
+        try:
+            send_message_safe(call.message.chat.id, f"❌ خطا در دریافت بیوگرافی: {str(e)}")
+        except:
+            pass
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("pv_"))
 def send_pv(call):
+    user_id = call.from_user.id
+    logger.info(f"📨 pv_ callback received from user {user_id}: {call.data}")
+    
     try:
-        if is_rate_limited(call.from_user.id):
+        # اطمینان از اتصال دیتابیس
+        if not ensure_db_connection():
+            bot.answer_callback_query(call.id, "❌ خطا در اتصال به دیتابیس!", show_alert=True)
+            return
+
+        if is_rate_limited(user_id):
             bot.answer_callback_query(call.id, "⏳ لطفاً کمی صبر کنید!", show_alert=True)
             return
 
@@ -1101,32 +1183,54 @@ def send_pv(call):
         if len(parts) < 3:
             bot.answer_callback_query(call.id, "❌ داده نامعتبر!", show_alert=True)
             return
+            
         _, clicker_id_str, owner_id_str = parts
         clicker_id = int(clicker_id_str)
         owner_id = int(owner_id_str)
-        user_id = call.from_user.id
 
         if user_id != owner_id:
             bot.answer_callback_query(call.id, "این دکمه فقط برای صاحب لینک قابل استفاده است!", show_alert=True)
             return
 
-        chat = bot.get_chat(clicker_id)
-        username = chat.username
-        if username:
-            user_info = f"🆔 آیدی کاربر فضول:\n@{username}"
-        else:
-            user_info = f"🆔 آیدی کاربر فضول:\n{clicker_id}"
-        send_message_safe(call.message.chat.id, user_info)
-        bot.answer_callback_query(call.id, "✅")
+        try:
+            chat = bot.get_chat(clicker_id)
+            username = chat.username
+            
+            if username:
+                user_info = f"🆔 آیدی کاربر فضول:\n@{username}"
+            else:
+                user_info = f"🆔 آیدی کاربر فضول:\n{clicker_id}"
+                
+            send_message_safe(call.message.chat.id, user_info)
+            bot.answer_callback_query(call.id, "✅ آیدی ارسال شد")
+            
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Error getting user info for {clicker_id}: {error_msg}")
+            
+            if "bot was blocked" in error_msg:
+                send_message_safe(call.message.chat.id, "❌ کاربر ربات را بلاک کرده است.")
+            else:
+                send_message_safe(call.message.chat.id, f"❌ خطا در دریافت آیدی: {error_msg[:100]}")
+            
+            bot.answer_callback_query(call.id, f"⚠️ خطا: {error_msg[:50]}", show_alert=True)
+            
     except Exception as e:
-        logger.error(f"Error in send_pv: {e}")
-        bot.answer_callback_query(call.id, f"❌ خطا: {str(e)}", show_alert=True)
-        send_message_safe(call.message.chat.id, f"❌ خطا در دریافت آیدی: {str(e)}")
+        logger.error(f"🔥 Critical error in send_pv: {e}")
+        bot.answer_callback_query(call.id, f"❌ خطای سیستمی: {str(e)[:50]}", show_alert=True)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith("photo_"))
 def show_photo(call):
+    user_id = call.from_user.id
+    logger.info(f"🖼 photo_ callback received from user {user_id}: {call.data}")
+    
     try:
-        if is_rate_limited(call.from_user.id):
+        # اطمینان از اتصال دیتابیس
+        if not ensure_db_connection():
+            bot.answer_callback_query(call.id, "❌ خطا در اتصال به دیتابیس!", show_alert=True)
+            return
+
+        if is_rate_limited(user_id):
             bot.answer_callback_query(call.id, "⏳ لطفاً کمی صبر کنید!", show_alert=True)
             return
 
@@ -1134,26 +1238,40 @@ def show_photo(call):
         if len(parts) < 3:
             bot.answer_callback_query(call.id, "❌ داده نامعتبر!", show_alert=True)
             return
+            
         _, clicker_id_str, owner_id_str = parts
         clicker_id = int(clicker_id_str)
         owner_id = int(owner_id_str)
-        user_id = call.from_user.id
 
         if user_id != owner_id:
             bot.answer_callback_query(call.id, "این دکمه فقط برای صاحب لینک قابل استفاده است!", show_alert=True)
             return
 
-        photos = bot.get_user_profile_photos(clicker_id, limit=1)
-        if photos.total_count > 0:
-            file_id = photos.photos[0][-1].file_id
-            send_photo_safe(call.message.chat.id, file_id, caption="🖼 عکس پروفایل کاربر")
-        else:
-            send_message_safe(call.message.chat.id, "❌ این کاربر عکس پروفایل ندارد.")
-        bot.answer_callback_query(call.id, "✅")
+        try:
+            photos = bot.get_user_profile_photos(clicker_id, limit=1)
+            
+            if photos.total_count > 0:
+                file_id = photos.photos[0][-1].file_id
+                send_photo_safe(call.message.chat.id, file_id, caption="🖼 عکس پروفایل کاربر")
+                bot.answer_callback_query(call.id, "✅ عکس ارسال شد")
+            else:
+                send_message_safe(call.message.chat.id, "❌ این کاربر عکس پروفایل ندارد.")
+                bot.answer_callback_query(call.id, "⚠️ عکسی وجود ندارد")
+                
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"Error getting photo for {clicker_id}: {error_msg}")
+            
+            if "bot was blocked" in error_msg:
+                send_message_safe(call.message.chat.id, "❌ کاربر ربات را بلاک کرده است.")
+            else:
+                send_message_safe(call.message.chat.id, f"❌ خطا در دریافت عکس: {error_msg[:100]}")
+            
+            bot.answer_callback_query(call.id, f"⚠️ خطا: {error_msg[:50]}", show_alert=True)
+            
     except Exception as e:
-        logger.error(f"Error in show_photo: {e}")
-        bot.answer_callback_query(call.id, f"❌ خطا: {str(e)}", show_alert=True)
-        send_message_safe(call.message.chat.id, f"❌ خطا در دریافت عکس: {str(e)}")
+        logger.error(f"🔥 Critical error in show_photo: {e}")
+        bot.answer_callback_query(call.id, f"❌ خطای سیستمی: {str(e)[:50]}", show_alert=True)
 
 # ========== دکمه‌های تبلیغاتی (ad) ==========
 @bot.callback_query_handler(func=lambda call: call.data.startswith("ad_"))
@@ -1217,6 +1335,70 @@ def admin_panel(message):
     )
     
     send_message_safe(user_id, text, reply_markup=keyboard, parse_mode='Markdown')
+
+# ========== دستورات ادمین برای عیب‌یابی ==========
+@bot.message_handler(commands=['dbcheck'])
+def db_check_command(message):
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        return
+    
+    status = ensure_db_connection()
+    if status:
+        try:
+            c.execute("SELECT COUNT(*) FROM users")
+            count = c.fetchone()[0]
+            send_message_safe(user_id, f"✅ اتصال دیتابیس برقرار است.\nتعداد کاربران: {count}")
+        except Exception as e:
+            send_message_safe(user_id, f"❌ خطا در خواندن دیتابیس: {e}")
+    else:
+        send_message_safe(user_id, "❌ اتصال دیتابیس برقرار نیست!")
+
+@bot.message_handler(commands=['setwebhook'])
+def set_webhook_command(message):
+    user_id = message.from_user.id
+    if user_id not in ADMIN_IDS:
+        return
+    
+    bot.remove_webhook()
+    time.sleep(1)
+    webhook_url = f"{BASE_URL}/webhook"
+    if bot.set_webhook(url=webhook_url):
+        send_message_safe(user_id, f"✅ Webhook با موفقیت تنظیم شد:\n{webhook_url}")
+    else:
+        send_message_safe(user_id, f"❌ خطا در تنظیم Webhook:\n{webhook_url}")
+
+@bot.message_handler(commands=['test'])
+def test_command(message):
+    user_id = message.from_user.id
+    # فقط برای ادمین‌ها
+    if user_id not in ADMIN_IDS:
+        return
+    
+    # تست اتصال به دیتابیس
+    try:
+        c.execute("SELECT 1")
+        db_status = "✅ اتصال به دیتابیس برقرار است"
+    except Exception as e:
+        db_status = f"❌ خطا در اتصال به دیتابیس: {e}"
+    
+    # تست دریافت اطلاعات کاربر
+    try:
+        chat = bot.get_chat(user_id)
+        user_info = f"✅ اطلاعات کاربر: {chat.first_name} (ID: {user_id})"
+    except Exception as e:
+        user_info = f"❌ خطا در دریافت اطلاعات کاربر: {e}"
+    
+    # تعداد کاربران
+    try:
+        total = get_total_users()
+        users_count = f"✅ تعداد کاربران: {total}"
+    except Exception as e:
+        users_count = f"❌ خطا در شمارش کاربران: {e}"
+    
+    # ارسال نتیجه تست
+    test_result = f"🧪 **نتایج تست:**\n\n{db_status}\n{user_info}\n{users_count}\n\nاگر خطایی مشاهده می‌کنید، آن را به ادمین گزارش دهید."
+    send_message_safe(user_id, test_result, parse_mode='Markdown')
 
 # ========== هندلر نمایش کاربران بلاک‌کننده ==========
 @bot.callback_query_handler(func=lambda call: call.data == "admin_blocked")
