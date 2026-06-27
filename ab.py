@@ -540,32 +540,43 @@ def save_trapped_history(owner_id, clicker_id, clicker_name, clicker_username):
     except Exception as e:
         logger.error(f"Error saving trapped history: {e}")
 
+# ========== تابع اصلاح‌شده برای ارسال پیام تله ==========
 def delete_message_later(chat_id, message_id, delay, clicker_id, owner_name, report_id):
     time.sleep(delay)
+    
+    # بررسی پرداخت
     if DATABASE_URL:
         c.execute("SELECT status FROM cancel_payments WHERE report_id = %s AND status = 'paid'", (report_id,))
     else:
         c.execute("SELECT status FROM cancel_payments WHERE report_id = ? AND status = 'paid'", (report_id,))
     if c.fetchone():
         return
+    
+    # حذف پیام
     try:
         delete_message_safe(chat_id, message_id)
     except:
         pass
+    
+    # بررسی اینکه گزارش لغو نشده باشد
     if DATABASE_URL:
         c.execute("SELECT cancelled FROM pending_reports WHERE id = %s", (report_id,))
     else:
         c.execute("SELECT cancelled FROM pending_reports WHERE id = ?", (report_id,))
     result = c.fetchone()
+    
     if result and result[0] == False:
         if DATABASE_URL:
             c.execute("SELECT owner_id, clicker_id FROM pending_reports WHERE id = %s", (report_id,))
         else:
             c.execute("SELECT owner_id, clicker_id FROM pending_reports WHERE id = ?", (report_id,))
         row = c.fetchone()
+        
         if row:
             owner_id, clicker_id = row
             clicker_name = get_clicker_name(clicker_id)
+            
+            # ذخیره در تاریخچه
             try:
                 chat = bot.get_chat(clicker_id)
                 username = chat.username if chat.username else None
@@ -573,24 +584,43 @@ def delete_message_later(chat_id, message_id, delay, clicker_id, owner_name, rep
             except:
                 save_trapped_history(owner_id, clicker_id, clicker_name, None)
             
+            # ========== ساخت دکمه‌ها با callback_data صحیح ==========
             keyboard = InlineKeyboardMarkup(row_width=2)
+            
+            # استفاده از str() برای اطمینان از تبدیل به رشته
+            anon_callback = f"anon_{str(clicker_id)}_{str(owner_id)}"
+            bio_callback = f"bio_{str(clicker_id)}_{str(owner_id)}"
+            pv_callback = f"pv_{str(clicker_id)}_{str(owner_id)}"
+            photo_callback = f"photo_{str(clicker_id)}_{str(owner_id)}"
+            
+            logger.info(f"🔗 Creating buttons with: {anon_callback}, {bio_callback}, {pv_callback}, {photo_callback}")
+            
             keyboard.add(
-                InlineKeyboardButton("💬 پیام ناشناس", callback_data=f"anon_{clicker_id}_{owner_id}"),
-                InlineKeyboardButton("📝 بیوگرافی", callback_data=f"bio_{clicker_id}_{owner_id}"),
-                InlineKeyboardButton("📨 پیوی", callback_data=f"pv_{clicker_id}_{owner_id}"),
-                InlineKeyboardButton("🖼 عکس پروفایل", callback_data=f"photo_{clicker_id}_{owner_id}")
+                InlineKeyboardButton("💬 پیام ناشناس", callback_data=anon_callback),
+                InlineKeyboardButton("📝 بیوگرافی", callback_data=bio_callback),
+                InlineKeyboardButton("📨 پیوی", callback_data=pv_callback),
+                InlineKeyboardButton("🖼 عکس پروفایل", callback_data=photo_callback)
             )
+            
             report_msg = f"🎯 **یک فضول در تله افتاد!**\n\n👤 نام: {clicker_name}\n⏰ زمان: {datetime.now().strftime('%H:%M:%S')}"
+            
+            # ارسال پیام تله به صاحب لینک
             try:
-                send_message_safe(owner_id, report_msg, parse_mode='Markdown', reply_markup=keyboard)
-            except:
-                pass
+                sent_msg = send_message_safe(owner_id, report_msg, parse_mode='Markdown', reply_markup=keyboard)
+                if sent_msg:
+                    logger.info(f"✅ Trap message sent to owner {owner_id} with buttons")
+                else:
+                    logger.error(f"❌ send_message_safe returned None for owner {owner_id}")
+            except Exception as e:
+                logger.error(f"❌ Failed to send trap message to {owner_id}: {e}")
+            
+            # پیام نهایی به کلیکر
             final_message = f"⏰ **زمان شما تمام شد!**\n\nگزارش فضولی شما به {owner_name} ارسال گردید.\n\n❗️ **از پنل زیر استفاده کنید:**"
             try:
                 send_message_safe(clicker_id, final_message, parse_mode='Markdown')
                 main_panel(clicker_id)
-            except:
-                pass
+            except Exception as e:
+                logger.error(f"❌ Failed to send final message to {clicker_id}: {e}")
 
 # ---------- هندلر استارت (با پشتیبانی از لینک تبلیغاتی) ----------
 @bot.message_handler(commands=['start'])
@@ -810,6 +840,7 @@ def handle_help(message):
 # ========== پیام ناشناس رایگان (با قابلیت پاسخ و محدودیت ۱۰ عدد در روز برای ارسال اولیه) ==========
 @bot.callback_query_handler(func=lambda call: call.data.startswith("anon_"))
 def anonymous_message(call):
+    logger.info(f"💬 ANON CALLBACK RECEIVED: {call.data} from {call.from_user.id}")
     try:
         # بررسی محدودیت نرخ کلیک
         if is_rate_limited(call.from_user.id):
@@ -1367,6 +1398,32 @@ def set_webhook_command(message):
         send_message_safe(user_id, f"✅ Webhook با موفقیت تنظیم شد:\n{webhook_url}")
     else:
         send_message_safe(user_id, f"❌ خطا در تنظیم Webhook:\n{webhook_url}")
+
+# ========== دستور تست کالبک ==========
+@bot.message_handler(commands=['testcallback'])
+def test_callback_command(message):
+    user_id = message.from_user.id
+    keyboard = InlineKeyboardMarkup(row_width=1)
+    keyboard.add(
+        InlineKeyboardButton("🔴 تست کالبک 1", callback_data="test_1"),
+        InlineKeyboardButton("🔴 تست کالبک 2", callback_data="test_2"),
+        InlineKeyboardButton("🔴 تست با آیدی", callback_data=f"test_{user_id}_{12345}")
+    )
+    
+    send_message_safe(
+        user_id,
+        "🧪 **تست کالبک‌ها**\n\nروی دکمه‌های زیر کلیک کنید تا ببینیم کالبک کار می‌کند یا نه.\n\nاگر پیام «✅ کالبک کار کرد» را دیدید، یعنی سیستم کالبک سالم است.",
+        reply_markup=keyboard,
+        parse_mode='Markdown'
+    )
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("test_"))
+def test_callback_handler(call):
+    user_id = call.from_user.id
+    logger.info(f"✅ TEST CALLBACK: {call.data} from {user_id}")
+    
+    bot.answer_callback_query(call.id, "✅ کالبک با موفقیت کار کرد!", show_alert=True)
+    send_message_safe(call.message.chat.id, f"✅ **کالبک تست کار کرد!**\n\nداده: `{call.data}`\nکاربر: {user_id}", parse_mode='Markdown')
 
 @bot.message_handler(commands=['test'])
 def test_command(message):
